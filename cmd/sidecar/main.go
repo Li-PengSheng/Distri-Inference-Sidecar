@@ -1,17 +1,17 @@
 package main
 
+/*
+#cgo LDFLAGS: -L../../rust_ops/target/release -lrust_ops
+#include <stdint.h>
+int32_t add_numbers(int32_t a, int32_t b);
+*/
+import "C"
 import (
-    "fmt"
-    "net/http"
-    "strings"
+	"fmt"
 )
 
 func main() {
-    fmt.Println("Sidecar is running on :8080...")
-    http.HandleFunc("/infer", func(w http.ResponseWriter, r *http.Request) {
-        // 这里后续会加入 Dynamic Batching 逻辑
-        // 目前先直接转发给 Python
-        fmt.Fprint(w, "Sidecar received request and forwarding...")
-    })
-    http.ListenAndServe(":8080", nil)
+	// 调用 Rust 函数
+	res := C.add_numbers(10, 20)
+	fmt.Printf("Hello from Go! Rust says 10 + 20 = %d\n", res)
 }
