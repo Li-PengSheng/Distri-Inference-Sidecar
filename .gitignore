@@ -1,0 +1,112 @@
+# ============================================================
+# Go
+# ============================================================
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/bin/
+/dist/
+vendor/
+
+# Go workspace
+go.work
+go.work.sum
+
+# ============================================================
+# Python (python_backend/)
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python version managers
+.python-version
+
+# Package / build artifacts
+*.egg-info/
+dist/
+build/
+*.whl
+*.egg
+MANIFEST
+
+# Ruff cache
+.ruff_cache/
+
+# mypy / pyright / type checkers
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyright/
+pyrightconfig.json
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# ============================================================
+# Rust (rust_ops/)
+# ============================================================
+target/
+Cargo.lock
+# Uncomment below if this is a library crate (keep Cargo.lock for binaries)
+# Cargo.lock
+
+# ============================================================
+# Protobuf / Buf
+# ============================================================
+# Generated files (already committed under gen/)
+# gen/
+
+# Buf build cache
+.buf/
+
+# ============================================================
+# Docker
+# ============================================================
+.dockerignore
+
+# ============================================================
+# IDE & Editors
+# ============================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ============================================================
+# Environment & Secrets
+# ============================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+secrets/
+
+# ============================================================
+# Logs & Temp
+# ============================================================
+*.log
+*.tmp
+*.temp
+logs/
+tmp/
