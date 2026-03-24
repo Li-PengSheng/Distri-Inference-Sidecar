@@ -1,7 +1,7 @@
 [project]
 name = "python-backend"
 version = "0.1.0"
-description = "Add your description here"
+description = "Mock FastAPI inference backend for local development and integration testing"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

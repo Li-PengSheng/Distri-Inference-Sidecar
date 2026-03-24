@@ -1,3 +1,12 @@
+// Package batcher implements dynamic request batching for inference workloads.
+//
+// Incoming requests are placed onto an internal queue. A background goroutine
+// (Start) drains the queue into batches, each of which is forwarded as a
+// single JSON HTTP POST to the configured backend URL. Each caller blocks on
+// its own result channel until the batch response is fanned back to it.
+//
+// The batcher integrates with vramguard: if the GPU circuit-breaker is open,
+// Submit returns an error immediately rather than enqueuing the request.
 package batcher
 
 import (
@@ -12,25 +21,46 @@ import (
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/vramguard"
 )
 
+// Config holds tuning parameters for the Batcher.
 type Config struct {
+	// MaxBatchSize is the maximum number of requests collected into one batch
+	// before it is flushed immediately, regardless of MaxWaitMs.
 	MaxBatchSize int
-	MaxWaitMs    int
-	BackendURL   string
+	// MaxWaitMs is the maximum time in milliseconds the batcher will wait to
+	// fill a batch before flushing whatever it has collected so far.
+	MaxWaitMs int
+	// BackendURL is the HTTP endpoint that receives batched inference requests,
+	// e.g. "http://localhost:8000/infer".
+	BackendURL string
 }
 
+// Request represents a single inference request submitted by a gRPC caller.
 type Request struct {
-	ID        string
+	// ID is a unique identifier used to correlate the batch response back to
+	// this specific request.
+	ID string
+	// InputData is the raw model input payload (encoding is model-specific).
 	InputData []byte
+	// ModelName identifies which model the backend should run.
 	ModelName string
-	ResultCh  chan Result
+	// ResultCh receives exactly one Result when the batch containing this
+	// request has been processed by the backend.
+	ResultCh chan Result
 }
 
+// Result carries the outcome of a single inference request.
 type Result struct {
+	// OutputData is the raw model output returned by the backend.
 	OutputData []byte
-	LatencyMs  int64
-	Err        error
+	// LatencyMs is the end-to-end backend latency for the batch that contained
+	// this request, measured in milliseconds.
+	LatencyMs int64
+	// Err is non-nil when the request or batch failed.
+	Err error
 }
 
+// Batcher collects inference requests and flushes them in micro-batches to the
+// configured HTTP backend.
 type Batcher struct {
 	cfg     Config
 	queue   chan *Request
@@ -48,6 +78,8 @@ type batchResponse struct {
 	Results []singleResult `json:"results"`
 }
 
+// New creates and returns a Batcher wired to the given VRAM guard and metrics
+// collector. The internal request queue has a capacity of 1 000 entries.
 func New(cfg Config, vg *vramguard.Guard, m *metrics.Metrics) *Batcher {
 	return &Batcher{
 		cfg:     cfg,
@@ -67,6 +99,9 @@ func (b *Batcher) Submit(req *Request) error {
 	return nil
 }
 
+// Start runs the batcher's main loop in the calling goroutine. It continuously
+// collects batches and dispatches each one to the backend concurrently. This
+// method never returns; call it via go b.Start().
 func (b *Batcher) Start() {
 	slog.Info("batcher started",
 		"max_batch_size", b.cfg.MaxBatchSize,
@@ -82,6 +117,9 @@ func (b *Batcher) Start() {
 	}
 }
 
+// flushBatch serialises the batch into a JSON payload, posts it to the backend,
+// and fans each per-request result back through the corresponding ResultCh.
+// It is called concurrently (via goroutine) for each collected batch.
 func (b *Batcher) flushBatch(batch []*Request) {
 	start := time.Now()
 
@@ -173,7 +211,8 @@ func (b *Batcher) collectBatch() []*Request {
 	}
 }
 
-// GetGuard exposes the VRAM guard for health checks.
+// GetGuard exposes the VRAM guard so callers (e.g. the gRPC health-check
+// handler) can query circuit-breaker state and VRAM usage directly.
 func (b *Batcher) GetGuard() *vramguard.Guard {
 	return b.vg
 }

@@ -1,3 +1,10 @@
+// Package grpcserver implements the gRPC InferenceService defined in
+// proto/inference.proto.
+//
+// The server exposes two RPCs:
+//   - Infer: accepts a single inference request, submits it to the Batcher,
+//     and blocks until the result is available or the client context is done.
+//   - HealthCheck: returns current VRAM usage and circuit-breaker state.
 package grpcserver
 
 import (
@@ -12,6 +19,9 @@ import (
 	"google.golang.org/grpc"
 )
 
+// Server is the gRPC service implementation. It embeds the generated
+// UnimplementedInferenceServiceServer so that it satisfies the interface even
+// if new RPCs are added to the proto in the future.
 type Server struct {
 	pb.UnimplementedInferenceServiceServer
 	addr    string
@@ -19,6 +29,8 @@ type Server struct {
 	metrics *metrics.Metrics
 }
 
+// New creates a Server that will listen on addr and delegate inference work to
+// the provided Batcher, recording outcomes with the given Metrics.
 func New(addr string, b *batcher.Batcher, m *metrics.Metrics) *Server {
 	return &Server{
 		addr:    addr,
@@ -27,6 +39,8 @@ func New(addr string, b *batcher.Batcher, m *metrics.Metrics) *Server {
 	}
 }
 
+// Serve starts the gRPC server and blocks until it terminates. It registers the
+// InferenceService and begins accepting connections on the configured address.
 func (s *Server) Serve() error {
 	lis, err := net.Listen("tcp", s.addr)
 	if err != nil {
@@ -86,7 +100,8 @@ func (s *Server) Infer(ctx context.Context, req *pb.InferRequest) (*pb.InferResp
 	}
 }
 
-// HealthCheck returns current VRAM status.
+// HealthCheck returns the current VRAM utilisation and whether the
+// circuit-breaker is closed (healthy = true) or open (healthy = false).
 func (s *Server) HealthCheck(ctx context.Context, _ *pb.HealthRequest) (*pb.HealthResponse, error) {
 	usedMB, totalMB := s.batcher.GetGuard().GetUsage()
 	return &pb.HealthResponse{

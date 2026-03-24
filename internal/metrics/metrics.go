@@ -1,3 +1,7 @@
+// Package metrics registers and exposes Prometheus metrics for the sidecar.
+//
+// Calling New registers four metrics with the default Prometheus registry and
+// starts an HTTP server on :9090 that serves the /metrics scrape endpoint.
 package metrics
 
 import (
@@ -8,13 +12,21 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// Metrics holds the Prometheus collectors used across the sidecar.
 type Metrics struct {
-	InferLatency        prometheus.Histogram
-	BatchSize           prometheus.Histogram
+	// InferLatency tracks the end-to-end backend latency (ms) for each batch flush.
+	InferLatency prometheus.Histogram
+	// BatchSize tracks how many requests were grouped into each flushed batch.
+	BatchSize prometheus.Histogram
+	// CircuitBreakerTrips counts requests rejected because the VRAM guard is open.
 	CircuitBreakerTrips prometheus.Counter
-	VRAMUsedMB          prometheus.Gauge
+	// VRAMUsedMB reports the current GPU VRAM consumption in megabytes.
+	VRAMUsedMB prometheus.Gauge
 }
 
+// New registers all Prometheus metrics and starts the /metrics HTTP server on
+// :9090 in a background goroutine. It panics if any metric is already
+// registered (double-registration is a programming error).
 func New() *Metrics {
 	m := &Metrics{
 		InferLatency: prometheus.NewHistogram(prometheus.HistogramOpts{
