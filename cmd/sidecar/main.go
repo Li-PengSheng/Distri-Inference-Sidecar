@@ -1,3 +1,14 @@
+// Package main is the entry point for the Distri-Inference-Sidecar.
+//
+// It wires together three subsystems:
+//   - vramguard: polls nvidia-smi and opens a circuit-breaker when GPU VRAM
+//     utilisation exceeds the configured threshold.
+//   - batcher: collects gRPC inference requests into micro-batches and
+//     forwards them as a single HTTP call to the Python backend.
+//   - metrics: exposes Prometheus metrics on :9090/metrics.
+//
+// The process blocks until it receives SIGINT or SIGTERM, then shuts down
+// gracefully.
 package main
 
 import (

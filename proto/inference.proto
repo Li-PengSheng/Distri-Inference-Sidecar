@@ -1,31 +1,59 @@
 syntax = "proto3";
 
+// Package inference defines the gRPC service contract for the
+// Distri-Inference-Sidecar.
 package inference;
 
 option go_package = "github.com/Li-PengSheng/Distri-Inference-Sidecar/proto";
 
+// InferenceService is the primary service exposed by the sidecar.
 service InferenceService {
+  // Infer submits a single inference request. The sidecar transparently batches
+  // it with other concurrent requests before forwarding to the backend.
   rpc Infer(InferRequest) returns (InferResponse);
+
+  // HealthCheck returns live VRAM usage and circuit-breaker state. Use this to
+  // determine whether the sidecar is ready to accept new requests.
   rpc HealthCheck(HealthRequest) returns (HealthResponse);
 }
 
+// InferRequest carries a single model inference request.
 message InferRequest {
+  // request_id is a caller-assigned unique identifier used to correlate the
+  // response. It is echoed unchanged in InferResponse.request_id.
   string request_id = 1;
+  // input_data is the raw model input payload. The encoding format is
+  // model-specific and agreed upon between the caller and the backend.
   bytes  input_data = 2;
+  // model_name identifies which model the backend should execute.
   string model_name = 3;
 }
 
+// InferResponse carries the result of a single inference request.
 message InferResponse {
+  // request_id echoes the value from InferRequest.request_id.
   string request_id = 1;
+  // output_data is the raw model output returned by the backend. Empty when
+  // error is set.
   bytes  output_data = 2;
+  // latency_ms is the end-to-end backend latency for the batch that contained
+  // this request, measured in milliseconds.
   int64  latency_ms  = 3;
+  // error is non-empty when the request or the batch failed. Callers should
+  // check this field before using output_data.
   string error       = 4;
 }
 
+// HealthRequest is an empty placeholder; no input is required.
 message HealthRequest {}
 
+// HealthResponse reports the current health of the sidecar.
 message HealthResponse {
+  // healthy is true when the VRAM circuit-breaker is closed, meaning the
+  // sidecar is accepting new inference requests.
   bool   healthy      = 1;
+  // vram_used_mb is the GPU VRAM currently consumed, in megabytes.
   float  vram_used_mb  = 2;
+  // vram_total_mb is the total GPU VRAM available, in megabytes.
   float  vram_total_mb = 3;
 }

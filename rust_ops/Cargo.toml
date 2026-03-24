@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [lib]
-crate-type = ["staticlib"] # 告诉 Rust 编译成静态库，供 C/Go 使用
+# Compile as a C-compatible static library so it can be linked into Go (via
+# CGo) or any other C-compatible consumer.
+crate-type = ["staticlib"]
 
 [dependencies]
