@@ -17,7 +17,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"time"
+
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/batcher"
+	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/grpcserver"
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/metrics"
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/vramguard"
 )
@@ -33,12 +36,30 @@ func main() {
 	})
 	go vg.Start()
 
+	// Sync VRAM reading into Prometheus gauge every 5s
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		for range ticker.C {
+			used, _ := vg.GetUsage()
+			m.VRAMUsedMB.Set(used)
+		}
+	}()
+
 	b := batcher.New(batcher.Config{
-		MaxBatchSize: 32,
-		MaxWaitMs:    20,
+		MaxBatchSize: 8,  // keep small — Ollama is sequential per request
+		MaxWaitMs:    50, // 50ms window to collect a batch
 		BackendURL:   "http://localhost:8000/infer",
 	}, vg, m)
 	go b.Start()
+
+	// Start gRPC server
+	srv := grpcserver.New(":50051", b, m)
+	go func() {
+		if err := srv.Serve(); err != nil {
+			slog.Error("gRPC server failed", "err", err)
+			os.Exit(1)
+		}
+	}()
 
 	slog.Info("sidecar ready", "grpc", ":50051", "metrics", ":9090")
 

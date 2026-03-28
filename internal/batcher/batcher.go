@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/metrics"
+	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/tokenizer"
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/vramguard"
 )
 
@@ -150,6 +151,12 @@ func (b *Batcher) flushBatch(batch []*Request) {
 			InputData: req.InputData,
 			ModelName: req.ModelName,
 		})
+	}
+
+	// At the top of flushBatch, before the HTTP call
+	for _, req := range batch {
+		toks := tokenizer.TokenizeLen(string(req.InputData))
+		slog.Debug("tokenized request", "id", req.ID, "tokens", toks)
 	}
 
 	body, _ := json.Marshal(payload)

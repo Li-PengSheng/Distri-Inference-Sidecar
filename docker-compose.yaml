@@ -1,0 +1,24 @@
+version: "3.9"
+services:
+  backend:
+    build: ./python_backend
+    ports: ["8000:8000"]
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+
+  sidecar:
+    build: .
+    ports: ["50051:50051", "9090:9090"]
+    depends_on: [backend]
+    environment:
+      BACKEND_URL: http://backend:8000/infer
+
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports: ["9091:9090"]
+
+  grafana:
+    image: grafana/grafana
+    ports: ["3000:3000"]
+    depends_on: [prometheus]

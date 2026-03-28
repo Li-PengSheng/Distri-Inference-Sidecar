@@ -6,6 +6,7 @@ edition = "2024"
 [lib]
 # Compile as a C-compatible static library so it can be linked into Go (via
 # CGo) or any other C-compatible consumer.
+name = "rust_ops"
 crate-type = ["staticlib"]
 
 [dependencies]

@@ -11,30 +11,63 @@ Iris dataset and returns a prediction — purely to demonstrate the shape of the
 request/response without requiring a GPU.
 """
 
+import asyncio
+import os
+from typing import List
+
+import httpx
+import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import List
-import time, base64
 
-app = FastAPI(title="Mock Inference Backend", version="0.1.0")
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL_NAME = "qwen2.5-1.5b"
+
+app = FastAPI(title="Inference Backend", version="0.1.0")
+
 
 class SingleReq(BaseModel):
     id: str
     input_data: bytes
     model_name: str
 
+
 class BatchPayload(BaseModel):
     requests: List[SingleReq]
 
+
+async def call_ollama(client: httpx.AsyncClient, req: SingleReq) -> dict:
+    prompt = req.input_data.decode("utf-8", errors="replace")
+    try:
+        resp = await client.post(
+            OLLAMA_URL,
+            json={
+                "model": MODEL_NAME,
+                "prompt": prompt,
+                "stream": False,
+            },
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        output = resp.json().get("response", "")
+        return {"id": req.id, "output_data": output.encode(), "error": ""}
+    except Exception as e:
+        return {"id": req.id, "output_data": b"", "error": str(e)}
+
+
 @app.post("/infer")
 async def infer(payload: BatchPayload):
-    results = []
-    for req in payload.requests:
-        # Replace this block with real model logic later
-        output = f"echo:{base64.b64encode(req.input_data).decode()}"
-        results.append({
-            "id": req.id,
-            "output_data": output.encode(),
-            "error": ""
-        })
-    return {"results": results}
+    # Fan all requests in the batch out to Ollama concurrently
+    async with httpx.AsyncClient() as client:
+        tasks = [call_ollama(client, req) for req in payload.requests]
+        results = await asyncio.gather(*tasks)
+    return {"results": list(results)}
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "model": MODEL_NAME}
+
+if __name__ == "__main__":
+    port = int(os.getenv("BACKEND_PORT", "8000"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
