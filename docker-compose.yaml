@@ -1,24 +1,40 @@
-version: "3.9"
 services:
   backend:
     build: ./python_backend
-    ports: ["8000:8000"]
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      BACKEND_PORT: "8000"
 
   sidecar:
     build: .
-    ports: ["50051:50051", "9090:9090"]
-    depends_on: [backend]
+    ports:
+      - "50051:50051"
+      - "9090:9090"
+    depends_on:
+      - backend
     environment:
-      BACKEND_URL: http://backend:8000/infer
+      BACKEND_URL: "http://backend:8000/infer"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   prometheus:
-    image: prom/prometheus
+    image: prom/prometheus:latest
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    ports: ["9091:9090"]
+    ports:
+      - "9091:9090"
+    depends_on:
+      - sidecar
 
   grafana:
-    image: grafana/grafana
-    ports: ["3000:3000"]
-    depends_on: [prometheus]
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus

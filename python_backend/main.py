@@ -1,6 +1,3 @@
-"""
-"""
-
 import asyncio
 import os
 from typing import List
@@ -10,7 +7,7 @@ import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_URL = "http://host.docker.internal:11434/api/generate"
 MODEL_NAME = "qwen2.5-1.5b"
 
 app = FastAPI(title="Inference Backend", version="0.1.0")

@@ -100,11 +100,12 @@ func queryVRAM() (used, total float64, err error) {
 		"--format=csv,noheader,nounits",
 	).Output()
 	if err != nil {
-		return 0, 1024, err
+		// No GPU available — return safe defaults silently
+		return 0, 1024, nil
 	}
 	parts := strings.Split(strings.TrimSpace(string(out)), ", ")
 	if len(parts) != 2 {
-		return 0, 0, nil
+		return 0, 1024, nil
 	}
 	used, _ = strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
 	total, _ = strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
