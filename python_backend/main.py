@@ -12,33 +12,29 @@ request/response without requiring a GPU.
 """
 
 from fastapi import FastAPI
-from sklearn.datasets import load_iris
-from sklearn.ensemble import RandomForestClassifier
+from pydantic import BaseModel
+from typing import List
+import time, base64
 
 app = FastAPI(title="Mock Inference Backend", version="0.1.0")
 
+class SingleReq(BaseModel):
+    id: str
+    input_data: bytes
+    model_name: str
 
-@app.post("/predict")
-async def predict(data: dict) -> dict:
-    """Run a mock inference and return a placeholder prediction.
+class BatchPayload(BaseModel):
+    requests: List[SingleReq]
 
-    Trains a RandomForestClassifier on the Iris dataset on every call (for
-    demonstration purposes only) and returns a single prediction for a
-    hard-coded sample input.
-
-    Args:
-        data: Arbitrary JSON body (ignored in this mock implementation).
-
-    Returns:
-        A dict with a ``result`` key containing the stringified prediction.
-    """
-    iris = load_iris()
-    clf = RandomForestClassifier()
-    clf.fit(iris.data, iris.target)
-    prediction = clf.predict([[5.1, 3.5, 1.4, 0.2]])
-    return {"result": f"processed: {prediction}"}
-
-
-def __main__() -> None:
-    """Entry point placeholder (use uvicorn to run the app instead)."""
-    pass
+@app.post("/infer")
+async def infer(payload: BatchPayload):
+    results = []
+    for req in payload.requests:
+        # Replace this block with real model logic later
+        output = f"echo:{base64.b64encode(req.input_data).decode()}"
+        results.append({
+            "id": req.id,
+            "output_data": output.encode(),
+            "error": ""
+        })
+    return {"results": results}

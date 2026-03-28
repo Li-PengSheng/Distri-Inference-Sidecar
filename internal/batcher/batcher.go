@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/metrics"
@@ -62,10 +63,12 @@ type Result struct {
 // Batcher collects inference requests and flushes them in micro-batches to the
 // configured HTTP backend.
 type Batcher struct {
-	cfg     Config
-	queue   chan *Request
-	vg      *vramguard.Guard
-	metrics *metrics.Metrics
+	cfg        Config
+	queue      chan *Request
+	vg         *vramguard.Guard
+	metrics    *metrics.Metrics
+	reqCount   atomic.Int64 // requests in last second
+	currentQPS atomic.Int64 // updated every second
 }
 
 type singleResult struct {
@@ -96,6 +99,7 @@ func (b *Batcher) Submit(req *Request) error {
 		return fmt.Errorf("vram guard: circuit open, try again later")
 	}
 	b.queue <- req
+	b.reqCount.Add(1)
 	return nil
 }
 
@@ -196,7 +200,7 @@ func (b *Batcher) flushBatch(batch []*Request) {
 // collectBatch waits up to MaxWaitMs OR until MaxBatchSize is reached.
 func (b *Batcher) collectBatch() []*Request {
 	var batch []*Request
-	deadline := time.After(time.Duration(b.cfg.MaxWaitMs) * time.Millisecond)
+	deadline := time.After(b.dynamicWaitMs())
 
 	for {
 		select {
@@ -215,4 +219,26 @@ func (b *Batcher) collectBatch() []*Request {
 // handler) can query circuit-breaker state and VRAM usage directly.
 func (b *Batcher) GetGuard() *vramguard.Guard {
 	return b.vg
+}
+
+// Add this goroutine in Start():
+func (b *Batcher) trackQPS() {
+	ticker := time.NewTicker(time.Second)
+	for range ticker.C {
+		count := b.reqCount.Swap(0)
+		b.currentQPS.Store(count)
+	}
+}
+
+// Dynamic wait: high QPS → wait longer to fill bigger batches
+func (b *Batcher) dynamicWaitMs() time.Duration {
+	qps := b.currentQPS.Load()
+	switch {
+	case qps > 100:
+		return time.Duration(b.cfg.MaxWaitMs) * time.Millisecond
+	case qps > 50:
+		return time.Duration(b.cfg.MaxWaitMs/2) * time.Millisecond
+	default:
+		return time.Duration(b.cfg.MaxWaitMs/4) * time.Millisecond
+	}
 }
