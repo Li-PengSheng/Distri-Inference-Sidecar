@@ -1,14 +1,4 @@
-"""Mock inference backend for the Distri-Inference-Sidecar.
-
-This FastAPI application simulates an ML model inference server. It is
-intentionally minimal and is used for local development and integration
-testing only. In production, replace this with a real model-serving runtime
-(e.g. TorchServe, Triton, vLLM, etc.).
-
-The sidecar forwards batched requests to POST /infer. This module exposes a
-simple POST /predict endpoint that trains a throwaway RandomForest on the
-Iris dataset and returns a prediction — purely to demonstrate the shape of the
-request/response without requiring a GPU.
+"""
 """
 
 import asyncio

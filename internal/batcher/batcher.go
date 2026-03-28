@@ -112,6 +112,7 @@ func (b *Batcher) Start() {
 		"max_batch_size", b.cfg.MaxBatchSize,
 		"max_wait_ms", b.cfg.MaxWaitMs,
 	)
+	go b.trackQPS() // add this line
 	for {
 		batch := b.collectBatch()
 		if len(batch) == 0 {
@@ -192,7 +193,7 @@ func (b *Batcher) flushBatch(batch []*Request) {
 			continue
 		}
 		if res.Error != "" {
-			req.ResultCh <- Result{Err: fmt.Errorf(res.Error)}
+			req.ResultCh <- Result{Err: fmt.Errorf("%s", res.Error)}
 		} else {
 			req.ResultCh <- Result{
 				OutputData: res.OutputData,
