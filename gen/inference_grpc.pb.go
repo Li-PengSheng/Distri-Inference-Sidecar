@@ -4,6 +4,9 @@
 // - protoc             (unknown)
 // source: inference.proto
 
+// Package inference defines the gRPC service contract for the
+// Distri-Inference-Sidecar.
+
 package proto
 
 import (
@@ -26,8 +29,14 @@ const (
 // InferenceServiceClient is the client API for InferenceService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// InferenceService is the primary service exposed by the sidecar.
 type InferenceServiceClient interface {
+	// Infer submits a single inference request. The sidecar transparently batches
+	// it with other concurrent requests before forwarding to the backend.
 	Infer(ctx context.Context, in *InferRequest, opts ...grpc.CallOption) (*InferResponse, error)
+	// HealthCheck returns live VRAM usage and circuit-breaker state. Use this to
+	// determine whether the sidecar is ready to accept new requests.
 	HealthCheck(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
 }
 
@@ -62,8 +71,14 @@ func (c *inferenceServiceClient) HealthCheck(ctx context.Context, in *HealthRequ
 // InferenceServiceServer is the server API for InferenceService service.
 // All implementations must embed UnimplementedInferenceServiceServer
 // for forward compatibility.
+//
+// InferenceService is the primary service exposed by the sidecar.
 type InferenceServiceServer interface {
+	// Infer submits a single inference request. The sidecar transparently batches
+	// it with other concurrent requests before forwarding to the backend.
 	Infer(context.Context, *InferRequest) (*InferResponse, error)
+	// HealthCheck returns live VRAM usage and circuit-breaker state. Use this to
+	// determine whether the sidecar is ready to accept new requests.
 	HealthCheck(context.Context, *HealthRequest) (*HealthResponse, error)
 	mustEmbedUnimplementedInferenceServiceServer()
 }

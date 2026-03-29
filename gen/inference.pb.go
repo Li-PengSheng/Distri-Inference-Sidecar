@@ -4,6 +4,9 @@
 // 	protoc        (unknown)
 // source: inference.proto
 
+// Package inference defines the gRPC service contract for the
+// Distri-Inference-Sidecar.
+
 package proto
 
 import (
@@ -21,11 +24,17 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// InferRequest carries a single model inference request.
 type InferRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	InputData     []byte                 `protobuf:"bytes,2,opt,name=input_data,json=inputData,proto3" json:"input_data,omitempty"`
-	ModelName     string                 `protobuf:"bytes,3,opt,name=model_name,json=modelName,proto3" json:"model_name,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// request_id is a caller-assigned unique identifier used to correlate the
+	// response. It is echoed unchanged in InferResponse.request_id.
+	RequestId string `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	// input_data is the raw model input payload. The encoding format is
+	// model-specific and agreed upon between the caller and the backend.
+	InputData []byte `protobuf:"bytes,2,opt,name=input_data,json=inputData,proto3" json:"input_data,omitempty"`
+	// model_name identifies which model the backend should execute.
+	ModelName     string `protobuf:"bytes,3,opt,name=model_name,json=modelName,proto3" json:"model_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -81,12 +90,20 @@ func (x *InferRequest) GetModelName() string {
 	return ""
 }
 
+// InferResponse carries the result of a single inference request.
 type InferResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	OutputData    []byte                 `protobuf:"bytes,2,opt,name=output_data,json=outputData,proto3" json:"output_data,omitempty"`
-	LatencyMs     int64                  `protobuf:"varint,3,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
-	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// request_id echoes the value from InferRequest.request_id.
+	RequestId string `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	// output_data is the raw model output returned by the backend. Empty when
+	// error is set.
+	OutputData []byte `protobuf:"bytes,2,opt,name=output_data,json=outputData,proto3" json:"output_data,omitempty"`
+	// latency_ms is the end-to-end backend latency for the batch that contained
+	// this request, measured in milliseconds.
+	LatencyMs int64 `protobuf:"varint,3,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
+	// error is non-empty when the request or the batch failed. Callers should
+	// check this field before using output_data.
+	Error         string `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -149,6 +166,7 @@ func (x *InferResponse) GetError() string {
 	return ""
 }
 
+// HealthRequest is an empty placeholder; no input is required.
 type HealthRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -185,11 +203,16 @@ func (*HealthRequest) Descriptor() ([]byte, []int) {
 	return file_inference_proto_rawDescGZIP(), []int{2}
 }
 
+// HealthResponse reports the current health of the sidecar.
 type HealthResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Healthy       bool                   `protobuf:"varint,1,opt,name=healthy,proto3" json:"healthy,omitempty"`
-	VramUsedMb    float32                `protobuf:"fixed32,2,opt,name=vram_used_mb,json=vramUsedMb,proto3" json:"vram_used_mb,omitempty"`
-	VramTotalMb   float32                `protobuf:"fixed32,3,opt,name=vram_total_mb,json=vramTotalMb,proto3" json:"vram_total_mb,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// healthy is true when the VRAM circuit-breaker is closed, meaning the
+	// sidecar is accepting new inference requests.
+	Healthy bool `protobuf:"varint,1,opt,name=healthy,proto3" json:"healthy,omitempty"`
+	// vram_used_mb is the GPU VRAM currently consumed, in megabytes.
+	VramUsedMb float32 `protobuf:"fixed32,2,opt,name=vram_used_mb,json=vramUsedMb,proto3" json:"vram_used_mb,omitempty"`
+	// vram_total_mb is the total GPU VRAM available, in megabytes.
+	VramTotalMb   float32 `protobuf:"fixed32,3,opt,name=vram_total_mb,json=vramTotalMb,proto3" json:"vram_total_mb,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

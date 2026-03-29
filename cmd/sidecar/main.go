@@ -48,7 +48,7 @@ func main() {
 	b := batcher.New(batcher.Config{
 		MaxBatchSize: 8,  // keep small — Ollama is sequential per request
 		MaxWaitMs:    50, // 50ms window to collect a batch
-		BackendURL:   "http://localhost:8000/infer",
+		BackendURL:   os.Getenv("BACKEND_URL"),
 	}, vg, m)
 	go b.Start()
 

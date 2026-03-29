@@ -1,5 +1,8 @@
 import asyncio
 import os
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), "gen"))
+
 from typing import List
 
 import httpx
@@ -7,8 +10,9 @@ import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+
 OLLAMA_URL = "http://host.docker.internal:11434/api/generate"
-MODEL_NAME = "qwen2.5-1.5b"
+MODEL_NAME = "qwen2.5:1.5b"
 
 app = FastAPI(title="Inference Backend", version="0.1.0")
 
