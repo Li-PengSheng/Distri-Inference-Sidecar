@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import os
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), "gen"))
@@ -29,6 +30,7 @@ class BatchPayload(BaseModel):
 
 async def call_ollama(client: httpx.AsyncClient, req: SingleReq) -> dict:
     prompt = req.input_data.decode("utf-8", errors="replace")
+
     try:
         resp = await client.post(
             OLLAMA_URL,
@@ -41,9 +43,9 @@ async def call_ollama(client: httpx.AsyncClient, req: SingleReq) -> dict:
         )
         resp.raise_for_status()
         output = resp.json().get("response", "")
-        return {"id": req.id, "output_data": output.encode(), "error": ""}
+        return {"id": req.id, "output_data": output, "error": ""}  # ← string, not bytes
     except Exception as e:
-        return {"id": req.id, "output_data": b"", "error": str(e)}
+        return {"id": req.id, "output_data": "", "error": str(e)}
 
 
 @app.post("/infer")

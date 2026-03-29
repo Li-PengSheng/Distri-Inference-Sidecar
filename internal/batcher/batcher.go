@@ -72,9 +72,10 @@ type Batcher struct {
 	currentQPS atomic.Int64 // updated every second
 }
 
+// batcher.go — change OutputData type in singleResult
 type singleResult struct {
 	ID         string `json:"id"`
-	OutputData []byte `json:"output_data"`
+	OutputData string `json:"output_data"` // ← string, not []byte
 	Error      string `json:"error"`
 }
 
@@ -196,7 +197,7 @@ func (b *Batcher) flushBatch(batch []*Request) {
 			req.ResultCh <- Result{Err: fmt.Errorf("%s", res.Error)}
 		} else {
 			req.ResultCh <- Result{
-				OutputData: res.OutputData,
+				OutputData: []byte(res.OutputData),
 				LatencyMs:  latencyMs,
 			}
 		}

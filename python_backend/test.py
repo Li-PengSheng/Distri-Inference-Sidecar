@@ -109,7 +109,7 @@ def test_backend_single_infer():
             fail("Single /infer request", f"error: {result['error']}")
             return
 
-        output = base64.b64decode(result["output_data"]).decode("utf-8", errors="replace")
+        output = result["output_data"]
         ok("Single /infer request", f"{elapsed}ms → \"{output[:60]}...\"")
 
     except Exception as e:

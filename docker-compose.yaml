@@ -5,7 +5,8 @@ services:
       - "8000:8000"
     environment:
       BACKEND_PORT: "8000"
-
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   sidecar:
     build: .
     ports:
