@@ -2,10 +2,10 @@
 
 A lightweight **gRPC sidecar** that sits next to an AI inference backend and provides:
 
-- **Dynamic request batching** – collects individual gRPC requests into micro-batches before forwarding them to the backend, trading a small amount of latency for significantly higher throughput.
+- **Dynamic request batching** – collects individual gRPC requests into micro-batches before forwarding them to the backend, trading a small amount of latency for significantly higher throughput. The batch wait window shrinks automatically at low QPS and grows at high QPS.
 - **VRAM circuit-breaker** – polls GPU memory via `nvidia-smi` and rejects new requests while utilisation is above a configurable threshold, preventing out-of-memory crashes.
 - **Prometheus metrics** – exposes inference latency, batch-size distribution, circuit-breaker trip counts, and live VRAM usage on `:9090/metrics`.
-- **Rust performance library** – a C-ABI static library (`rust_ops`) that can be linked into Go or C for performance-critical numeric operations.
+- **Rust tokenizer library** – a C-ABI static library (`rust_ops`) providing whitespace-based token counting, linked into the Go sidecar via CGo for debug logging of prompt lengths.
 
 ---
 
@@ -63,6 +63,8 @@ go build ./cmd/sidecar
 
 ### 2. Start the Python mock backend
 
+The backend forwards prompts to an Ollama instance (model `qwen2.5:1.5b` by default) and must be able to reach it at `http://host.docker.internal:11434`.
+
 ```bash
 cd python_backend
 uv sync
@@ -80,9 +82,18 @@ The compiled library (`librust_ops.a`) can then be linked into Go or C code via 
 
 ### 4. Run the full stack with Docker Compose
 
+Starts the Python backend, Go sidecar, Prometheus, and Grafana.
+
 ```bash
 docker-compose up --build
 ```
+
+| Service | Port | Description |
+|---------|------|-------------|
+| backend | `8000` | Python FastAPI → Ollama proxy |
+| sidecar | `50051` / `9090` | gRPC server / Prometheus metrics |
+| prometheus | `9091` | Prometheus UI |
+| grafana | `3000` | Grafana dashboard |
 
 ---
 
@@ -92,9 +103,9 @@ The sidecar is configured directly in `cmd/sidecar/main.go`. Key parameters:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `MaxBatchSize` | `32` | Maximum number of requests per batch flush |
-| `MaxWaitMs` | `20` | Maximum time (ms) to wait before flushing an incomplete batch |
-| `BackendURL` | `http://localhost:8000/infer` | HTTP endpoint of the inference backend |
+| `MaxBatchSize` | `8` | Maximum number of requests per batch flush |
+| `MaxWaitMs` | `50` | Maximum time (ms) to wait before flushing an incomplete batch (scales down automatically at low QPS) |
+| `BackendURL` | `$BACKEND_URL` | HTTP endpoint of the inference backend |
 | `PollIntervalMs` | `500` | How often (ms) to query `nvidia-smi` for VRAM usage |
 | `OOMThresholdPct` | `90.0` | VRAM utilisation (%) at which the circuit-breaker opens |
 | gRPC address | `:50051` | Listening address of the gRPC server |
@@ -166,14 +177,15 @@ rpc HealthCheck(HealthRequest) returns (HealthResponse);
 .
 ├── cmd/sidecar/          # Main entry point
 ├── internal/
-│   ├── batcher/          # Dynamic request batcher
+│   ├── batcher/          # Dynamic request batcher (QPS-adaptive wait window)
 │   ├── grpcserver/       # gRPC server implementation
 │   ├── metrics/          # Prometheus metrics setup
+│   ├── tokenizer/        # CGo wrapper for the Rust token-counting library
 │   └── vramguard/        # GPU VRAM circuit-breaker
 ├── proto/                # Protobuf service definition
 ├── gen/                  # Auto-generated Go protobuf stubs
-├── python_backend/       # Mock FastAPI inference backend
-├── rust_ops/             # Rust static library (C ABI)
+├── python_backend/       # FastAPI backend that proxies requests to Ollama
+├── rust_ops/             # Rust static library (C ABI) – tokenizer implementation
 ├── buf.yaml              # Buf configuration for protobuf linting
 ├── buf.gen.yaml          # Buf code-generation configuration
 └── docker-compose.yaml   # Full-stack Docker Compose setup
