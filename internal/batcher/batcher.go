@@ -157,7 +157,7 @@ func (b *Batcher) flushBatch(batch []*Request) {
 
 	// At the top of flushBatch, before the HTTP call
 	for _, req := range batch {
-		toks := tokenizer.TokenizeLen(string(req.InputData))
+		toks := tokenizer.CountTokens(string(req.InputData))
 		slog.Debug("tokenized request", "id", req.ID, "tokens", toks)
 	}
 

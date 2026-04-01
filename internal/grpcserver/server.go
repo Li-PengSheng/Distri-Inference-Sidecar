@@ -16,6 +16,7 @@ import (
 	pb "github.com/Li-PengSheng/Distri-Inference-Sidecar/gen"
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/batcher"
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/metrics"
+	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/tokenizer"
 	"google.golang.org/grpc"
 )
 
@@ -57,6 +58,17 @@ func (s *Server) Serve() error {
 // Infer is called by gRPC clients.
 // It submits the request to the batcher and blocks until result comes back.
 func (s *Server) Infer(ctx context.Context, req *pb.InferRequest) (*pb.InferResponse, error) {
+
+	input := string(req.InputData)
+	if err := tokenizer.Validate(input); err != nil {
+		// 同时更新 Prometheus 指标
+		s.metrics.RejectedRequests.Inc()
+		return &pb.InferResponse{
+			RequestId: req.RequestId,
+			Error:     err.Error(),
+		}, nil
+	}
+
 	resultCh := make(chan batcher.Result, 1)
 
 	bReq := &batcher.Request{

@@ -21,7 +21,8 @@ type Metrics struct {
 	// CircuitBreakerTrips counts requests rejected because the VRAM guard is open.
 	CircuitBreakerTrips prometheus.Counter
 	// VRAMUsedMB reports the current GPU VRAM consumption in megabytes.
-	VRAMUsedMB prometheus.Gauge
+	VRAMUsedMB       prometheus.Gauge
+	RejectedRequests prometheus.Counter
 }
 
 // New registers all Prometheus metrics and starts the /metrics HTTP server on
@@ -47,6 +48,10 @@ func New() *Metrics {
 			Name: "vram_used_mb",
 			Help: "Current GPU VRAM usage in MB",
 		}),
+		RejectedRequests: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "rejected_requests_total",
+			Help: "Requests rejected by the tokenizer",
+		}),
 	}
 
 	prometheus.MustRegister(
@@ -54,6 +59,7 @@ func New() *Metrics {
 		m.BatchSize,
 		m.CircuitBreakerTrips,
 		m.VRAMUsedMB,
+		m.RejectedRequests,
 	)
 
 	// Expose /metrics for Prometheus scraping
