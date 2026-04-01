@@ -16,6 +16,11 @@ static TOKENIZER: OnceLock<BPETokenizer> = OnceLock::new();
 //     s.split_whitespace().count() as i32
 // }
 
+/// free_string releases a C string that was previously allocated by Rust with
+/// `CString::into_raw`. Do not call this on strings allocated outside Rust.
+///
+/// # Safety
+/// `s` must have been produced by `CString::into_raw` from within this library.
 #[unsafe(no_mangle)]
 pub extern "C" fn free_string(s: *mut c_char) {
     if !s.is_null() {

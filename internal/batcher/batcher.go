@@ -72,10 +72,11 @@ type Batcher struct {
 	currentQPS atomic.Int64 // updated every second
 }
 
-// batcher.go — change OutputData type in singleResult
+// singleResult holds the backend's response for one request within a batch.
+// OutputData is a plain string because the Ollama backend returns text directly.
 type singleResult struct {
 	ID         string `json:"id"`
-	OutputData string `json:"output_data"` // ← string, not []byte
+	OutputData string `json:"output_data"`
 	Error      string `json:"error"`
 }
 
@@ -155,7 +156,7 @@ func (b *Batcher) flushBatch(batch []*Request) {
 		})
 	}
 
-	// At the top of flushBatch, before the HTTP call
+	// Tokenize each request for debug logging before forwarding to the backend.
 	for _, req := range batch {
 		toks := tokenizer.CountTokens(string(req.InputData))
 		slog.Debug("tokenized request", "id", req.ID, "tokens", toks)
@@ -230,7 +231,8 @@ func (b *Batcher) GetGuard() *vramguard.Guard {
 	return b.vg
 }
 
-// Add this goroutine in Start():
+// trackQPS counts requests per second and stores the result in currentQPS.
+// It is launched as a goroutine by Start and runs for the lifetime of the Batcher.
 func (b *Batcher) trackQPS() {
 	ticker := time.NewTicker(time.Second)
 	for range ticker.C {
