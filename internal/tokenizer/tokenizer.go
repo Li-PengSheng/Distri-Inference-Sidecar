@@ -1,9 +1,3 @@
-// Package tokenizer provides a lightweight token-counting utility backed by a
-// Rust static library via CGo.
-//
-// TokenizeLen calls the C-ABI function tokenize_len exported from rust_ops,
-// which splits the input on whitespace and returns the word count as a fast
-// approximation of the number of tokens in a prompt.
 package tokenizer
 
 /*
