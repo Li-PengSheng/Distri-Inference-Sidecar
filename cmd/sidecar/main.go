@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"time"
@@ -22,12 +23,14 @@ import (
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/batcher"
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/grpcserver"
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/metrics"
+	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/tokenizer"
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/vramguard"
 )
 
 func main() {
 	slog.Info("starting Distri-Inference-Sidecar")
 
+	tokenizer.Init(strings.Repeat("hello world foo bar the quick brown fox ", 200))
 	m := metrics.New()
 
 	vg := vramguard.New(vramguard.Config{
