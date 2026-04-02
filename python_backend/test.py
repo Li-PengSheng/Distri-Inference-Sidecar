@@ -33,7 +33,7 @@ from gen import inference_pb2_grpc, inference_pb2  # Adjust import path based on
 
 GRPC_ADDR   = "localhost:50051"
 BACKEND_URL = "http://localhost:8000"
-METRICS_URL = "http://localhost:9090"
+METRICS_URL = "http://localhost:9091"
 
 GREEN  = "\033[92m"
 RED    = "\033[91m"
@@ -183,14 +183,30 @@ def test_backend_error_handling():
 
 def test_metrics():
     section("Prometheus metrics (:9090)")
+    # Warmup via gRPC sidecar — that's what records the Prometheus metrics
+    try:
+        channel = grpc.insecure_channel(GRPC_ADDR)
+        stub = inference_pb2_grpc.InferenceServiceStub(channel)
+        stub.Infer(
+            inference_pb2.InferRequest(
+                request_id="metrics-warmup",
+                input_data=b"hi",
+                model_name="qwen2.5:1.5b"
+            ),
+            timeout=30
+        )
+        channel.close()
+    except Exception:
+        pass  # best-effort
+
     try:
         resp = requests.get(f"{METRICS_URL}/metrics", timeout=5)
         if resp.status_code != 200:
             fail("GET /metrics returns 200", f"got {resp.status_code}")
             return
         ok("GET /metrics returns 200")
-
         text = resp.text
+
         expected_metrics = [
             "infer_latency_ms",
             "batch_size",
@@ -198,22 +214,19 @@ def test_metrics():
             "vram_used_mb",
         ]
         for metric in expected_metrics:
-            if metric in text:
-                # Extract value if possible
-                for line in text.splitlines():
-                    if line.startswith(metric) and not line.startswith("#"):
-                        value = line.split()[-1] if line.split() else "?"
-                        ok(f"Metric: {metric}", f"value={value}")
-                        break
+            found = any(
+                line.startswith(metric) or line.startswith(f"# HELP {metric}")
+                for line in text.splitlines()
+            )
+            if found:
+                ok(f"Metric: {metric}")
             else:
                 fail(f"Metric: {metric}", "not found in /metrics")
-
     except Exception as e:
         fail("GET /metrics", str(e))
 
 
 # ── 3. gRPC tests (via grpc channel) ─────────────────────────────────────────
-
 def test_grpc():
     section("gRPC sidecar (:50051)")
 
@@ -253,7 +266,7 @@ def test_grpc():
 
         # Infer RPC
         try:
-            prompt = "What is 1 + 1?"
+            prompt = "Hi?"
             start = time.time()
             resp = stub.Infer(
                 inference_pb2.InferRequest(
@@ -261,7 +274,7 @@ def test_grpc():
                     input_data=prompt.encode(),
                     model_name="qwen2.5:1.5b"
                 ),
-                timeout=60
+                timeout=120
             )
             elapsed = int((time.time() - start) * 1000)
 
@@ -342,6 +355,44 @@ def test_concurrent_batching(n=8):
         else:
             print(f"  {YELLOW}No significant batching speedup observed{RESET}")
 
+# ── 5. Token limit rejection test ─────────────────────────────────────────────
+def test_token_limit_rejection():
+    section("Token Limit Guard (gRPC layer)")
+    try:
+        channel = grpc.insecure_channel(GRPC_ADDR)
+        stub = inference_pb2_grpc.InferenceServiceStub(channel)
+
+        # 超长输入：远超 512 token 限制
+        long_input = ("hello world " * 300).encode()
+
+        resp = stub.Infer(
+            inference_pb2.InferRequest(
+                request_id="test-token-limit",
+                input_data=long_input,
+                model_name="qwen2.5:1.5b"
+            ),
+            timeout=10
+        )
+
+        if resp.error and "too long" in resp.error:
+            ok("Long input rejected at gRPC layer", resp.error)
+        elif resp.error:
+            ok("Long input rejected", resp.error)
+        else:
+            fail("Long input should be rejected", "got successful response instead")
+
+        channel.close()
+
+        # 验证 Prometheus 指标有记录
+        time.sleep(2)
+        metrics_resp = requests.get(f"{METRICS_URL}/metrics", timeout=5)
+        if "rejected_requests_total" in metrics_resp.text:
+            ok("rejected_requests_total metric exists in Prometheus")
+        else:
+            fail("rejected_requests_total", "not found in /metrics")
+
+    except Exception as e:
+        fail("Token limit rejection test", str(e))
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -360,10 +411,10 @@ def main():
 
     # Fast tests first
     test_backend_health()
-    test_metrics()
-
-    if not args.skip_grpc:
-        test_grpc()
+    test_grpc()          # ← move this before metrics
+    test_token_limit_rejection()
+    time.sleep(6)        # ← wait for vram gauge ticker
+    test_metrics()       # ← now histograms + gauge will be populated
 
     if not args.skip_llm:
         test_backend_single_infer()

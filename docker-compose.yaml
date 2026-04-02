@@ -11,7 +11,7 @@ services:
     build: .
     ports:
       - "50051:50051"
-      - "9090:9090"
+      - "9091:9090"
     depends_on:
       - backend
     environment:
@@ -29,7 +29,7 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
-      - "9091:9090"
+      - "9090:9090"
     depends_on:
       - sidecar
 

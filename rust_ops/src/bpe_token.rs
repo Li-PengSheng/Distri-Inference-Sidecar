@@ -103,3 +103,43 @@ impl BPETokenizer {
         result
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_train_builds_vocab() {
+        let mut tok = BPETokenizer::new(20);
+        tok.train("hello world hello foo bar", 20);
+        // 训练后 vocab 不应为空
+        assert!(!tok.vocab.is_empty());
+    }
+
+    #[test]
+    fn test_encode_returns_ids() {
+        let mut tok = BPETokenizer::new(20);
+        tok.train("hello world hello foo bar", 20);
+        let ids = tok.encode("hello world");
+        assert!(!ids.is_empty());
+    }
+
+    #[test]
+    fn test_encode_empty_string() {
+        let mut tok = BPETokenizer::new(10);
+        tok.train("hello world", 10);
+        let ids = tok.encode("");
+        assert_eq!(ids.len(), 0);
+    }
+
+    #[test]
+    fn test_merge_reduces_tokens() {
+        let mut tok = BPETokenizer::new(30);
+        // 重复训练让 "hello" 被合并
+        tok.train(&"hello world ".repeat(100), 30);
+        let ids = tok.encode("hello");
+        // 合并后 token 数应该 <= 字符数
+        assert!(ids.len() <= 5); // "hello" 有5个字符
+    }
+}

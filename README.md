@@ -214,6 +214,19 @@ cd python_backend
 uv run ruff check .
 ```
 
+## Test and Result
+![](docs/project-dist-test1.png)
+
+![](docs/project-dist-test2.png)
+
+![](docs/project-dist-rust_test.png)
+
+![](docs/project-dist-bench-test.png)
+
+![](docs/project-dist-grafana1.png)
+
+![](docs/project-dist-grafana2.png)
+
 ---
 
 ## License
