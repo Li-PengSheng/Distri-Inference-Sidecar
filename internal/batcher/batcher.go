@@ -114,7 +114,7 @@ func (b *Batcher) Start() {
 		"max_batch_size", b.cfg.MaxBatchSize,
 		"max_wait_ms", b.cfg.MaxWaitMs,
 	)
-	go b.trackQPS() // add this line
+	go b.trackQPS()
 	for {
 		batch := b.collectBatch()
 		if len(batch) == 0 {
