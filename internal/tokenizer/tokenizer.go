@@ -28,7 +28,7 @@ func Init(trainCorpus string) {
 }
 
 // CountTokens returns the number of BPE tokens in input as determined by the
-// Rust tokenizer. If the tokenizer has not been initialised it falls back to
+// Rust tokenizer. If the tokenizer has not been initialized it falls back to
 // whitespace splitting.
 func CountTokens(input string) int {
 	cs := C.CString(input)

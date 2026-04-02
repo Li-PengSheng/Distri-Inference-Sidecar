@@ -1,8 +1,8 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
-// Global BPE tokenizer instance, initialised exactly once via bpe_train.
-// OnceLock ensures thread-safe lazy initialisation without a Mutex.
+// Global BPE tokenizer instance, initialized exactly once via bpe_train.
+// OnceLock ensures thread-safe lazy initialization without a Mutex.
 use std::sync::OnceLock;
 mod bpe_token;
 use bpe_token::BPETokenizer;
@@ -32,7 +32,7 @@ pub extern "C" fn bpe_train(text: *const c_char, vocab_size: usize) {
 }
 
 /// bpe_encode_len returns the number of BPE token IDs produced by encoding
-/// `input`. Returns -1 if the tokenizer has not been initialised.
+/// `input`. Returns -1 if the tokenizer has not been initialized.
 #[unsafe(no_mangle)]
 pub extern "C" fn bpe_encode_len(input: *const c_char) -> i32 {
     let s = unsafe { CStr::from_ptr(input) }.to_str().unwrap_or("");
