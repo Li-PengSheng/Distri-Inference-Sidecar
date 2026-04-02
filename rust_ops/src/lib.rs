@@ -1,20 +1,12 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
-// 全局 tokenizer 实例（用 Once 保证线程安全初始化）
+// Global BPE tokenizer instance, initialized exactly once via bpe_train.
+// OnceLock ensures thread-safe lazy initialization without a Mutex.
 use std::sync::OnceLock;
 mod bpe_token;
 use bpe_token::BPETokenizer;
 static TOKENIZER: OnceLock<BPETokenizer> = OnceLock::new();
-
-// #[unsafe(no_mangle)]
-// pub extern "C" fn tokenize_len(input: *const c_char) -> i32 {
-//     if input.is_null() {
-//         return 0;
-//     }
-//     let s = unsafe { CStr::from_ptr(input) }.to_str().unwrap_or("");
-//     s.split_whitespace().count() as i32
-// }
 
 /// free_string releases a C string that was previously allocated by Rust with
 /// `CString::into_raw`. Do not call this on strings allocated outside Rust.
@@ -28,7 +20,9 @@ pub extern "C" fn free_string(s: *mut c_char) {
     }
 }
 
-// 训练接口
+/// bpe_train trains the global BPE tokenizer on `text` with the given
+/// `vocab_size`. It must be called once before any call to bpe_count_tokens or
+/// bpe_encode_len. Subsequent calls are silently ignored.
 #[unsafe(no_mangle)]
 pub extern "C" fn bpe_train(text: *const c_char, vocab_size: usize) {
     let s = unsafe { CStr::from_ptr(text) }.to_str().unwrap_or("");
@@ -37,7 +31,8 @@ pub extern "C" fn bpe_train(text: *const c_char, vocab_size: usize) {
     TOKENIZER.set(tok).ok();
 }
 
-// 编码接口：返回 token 数量
+/// bpe_encode_len returns the number of BPE token IDs produced by encoding
+/// `input`. Returns -1 if the tokenizer has not been initialized.
 #[unsafe(no_mangle)]
 pub extern "C" fn bpe_encode_len(input: *const c_char) -> i32 {
     let s = unsafe { CStr::from_ptr(input) }.to_str().unwrap_or("");
@@ -47,14 +42,16 @@ pub extern "C" fn bpe_encode_len(input: *const c_char) -> i32 {
     }
 }
 
-// 保留原来的 whitespace tokenizer 作对比
+/// tokenize_len counts tokens by splitting on whitespace. Kept as a reference
+/// implementation and fallback for comparison against the BPE tokenizer.
 #[unsafe(no_mangle)]
 pub extern "C" fn tokenize_len(input: *const c_char) -> i32 {
     let s = unsafe { CStr::from_ptr(input) }.to_str().unwrap_or("");
     s.split_whitespace().count() as i32
 }
 
-// 返回 token 数量，供 Go 层判断
+/// bpe_count_tokens returns the BPE token count for `input`. Falls back to
+/// whitespace splitting if the tokenizer has not been initialised via bpe_train.
 #[unsafe(no_mangle)]
 pub extern "C" fn bpe_count_tokens(input: *const c_char) -> i32 {
     let s = unsafe { CStr::from_ptr(input) }
@@ -62,6 +59,6 @@ pub extern "C" fn bpe_count_tokens(input: *const c_char) -> i32 {
         .unwrap_or("");
     match TOKENIZER.get() {
         Some(tok) => tok.encode(s).len() as i32,
-        None => tokenize_len(input), // 降级到 whitespace
+        None => tokenize_len(input), // fall back to whitespace splitting
     }
 }

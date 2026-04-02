@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+/// BPETokenizer implements a minimal Byte-Pair Encoding tokenizer.
+/// Call `train` once on a representative corpus to build the vocabulary and
+/// merge table, then call `encode` to convert text into token IDs.
 pub struct BPETokenizer {
     pub vocab: HashMap<String, u32>,
     pub merges: HashMap<(String, String), String>,
@@ -21,7 +24,8 @@ impl BPETokenizer {
             .map(|w| w.chars().map(|c| c.to_string()).collect())
             .collect();
 
-        // 修复 vocab_id 借用问题：先收集所有字符再插入
+        // Collect all unique characters first, then insert them into the vocab
+        // in a single pass to avoid conflicting borrows on self.vocab.
         let mut all_chars: Vec<String> = Vec::new();
         for word in &words {
             for ch in word {
@@ -51,11 +55,11 @@ impl BPETokenizer {
             };
 
             let merged = format!("{}{}", best.0, best.1);
-            
-            // 用 HashMap 存 merges，O(1) 查找
+
+            // Store the merge rule in a HashMap for O(1) lookup during encode.
             self.merges.insert(best.clone(), merged.clone());
             self.merge_order.push(best.clone());
-            
+
             let id = self.vocab.len() as u32;
             self.vocab.insert(merged.clone(), id);
 
@@ -79,7 +83,7 @@ impl BPETokenizer {
         for word in text.split_whitespace() {
             let mut tokens: Vec<String> = word.chars().map(|c| c.to_string()).collect();
 
-            // 按 merge_order 顺序，用 HashMap O(1) 查找
+            // Apply merges in training order using O(1) HashMap lookups.
             for (left, right) in &self.merge_order {
                 let merged = match self.merges.get(&(left.clone(), right.clone())) {
                     Some(m) => m.clone(),
@@ -113,7 +117,7 @@ mod tests {
     fn test_train_builds_vocab() {
         let mut tok = BPETokenizer::new(20);
         tok.train("hello world hello foo bar", 20);
-        // 训练后 vocab 不应为空
+        // Vocabulary must be non-empty after training.
         assert!(!tok.vocab.is_empty());
     }
 
@@ -136,10 +140,10 @@ mod tests {
     #[test]
     fn test_merge_reduces_tokens() {
         let mut tok = BPETokenizer::new(30);
-        // 重复训练让 "hello" 被合并
+        // Repeated training causes "hello" to be merged into fewer tokens.
         tok.train(&"hello world ".repeat(100), 30);
         let ids = tok.encode("hello");
-        // 合并后 token 数应该 <= 字符数
-        assert!(ids.len() <= 5); // "hello" 有5个字符
+        // After merging, the token count must be at most the character count (5).
+        assert!(ids.len() <= 5);
     }
 }

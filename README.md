@@ -5,7 +5,7 @@ A lightweight **gRPC sidecar** that sits next to an AI inference backend and pro
 - **Dynamic request batching** – collects individual gRPC requests into micro-batches before forwarding them to the backend, trading a small amount of latency for significantly higher throughput. The batch wait window shrinks automatically at low QPS and grows at high QPS.
 - **VRAM circuit-breaker** – polls GPU memory via `nvidia-smi` and rejects new requests while utilisation is above a configurable threshold, preventing out-of-memory crashes.
 - **Prometheus metrics** – exposes inference latency, batch-size distribution, circuit-breaker trip counts, and live VRAM usage on `:9090/metrics`.
-- **Rust tokenizer library** – a C-ABI static library (`rust_ops`) providing whitespace-based token counting, linked into the Go sidecar via CGo for debug logging of prompt lengths.
+- **Rust BPE tokenizer library** – a C-ABI static library (`rust_ops`) implementing a Byte-Pair Encoding tokenizer, linked into the Go sidecar via CGo. Used to validate prompt lengths and reject inputs that exceed the 512-token limit.
 
 ---
 
@@ -119,7 +119,7 @@ The service contract is defined in [`proto/inference.proto`](proto/inference.pro
 
 ### `Infer`
 
-Send a single inference request. The sidecar batches it transparently before forwarding to the backend.
+Send a single inference request. The sidecar validates the prompt length (max 512 BPE tokens), then batches the request transparently before forwarding to the backend.
 
 ```proto
 rpc Infer(InferRequest) returns (InferResponse);
@@ -168,6 +168,7 @@ rpc HealthCheck(HealthRequest) returns (HealthResponse);
 | `batch_size` | Histogram | Number of requests in each flushed batch |
 | `circuit_breaker_trips_total` | Counter | Requests rejected because the VRAM circuit is open |
 | `vram_used_mb` | Gauge | Current GPU VRAM usage in MB |
+| `rejected_requests_total` | Counter | Requests rejected by the tokenizer (prompt exceeds 512 tokens) |
 
 ---
 
@@ -185,7 +186,7 @@ rpc HealthCheck(HealthRequest) returns (HealthResponse);
 ├── proto/                # Protobuf service definition
 ├── gen/                  # Auto-generated Go protobuf stubs
 ├── python_backend/       # FastAPI backend that proxies requests to Ollama
-├── rust_ops/             # Rust static library (C ABI) – tokenizer implementation
+├── rust_ops/             # Rust static library (C ABI) – BPE tokenizer implementation
 ├── buf.yaml              # Buf configuration for protobuf linting
 ├── buf.gen.yaml          # Buf code-generation configuration
 └── docker-compose.yaml   # Full-stack Docker Compose setup

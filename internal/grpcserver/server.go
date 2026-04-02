@@ -61,7 +61,7 @@ func (s *Server) Infer(ctx context.Context, req *pb.InferRequest) (*pb.InferResp
 
 	input := string(req.InputData)
 	if err := tokenizer.Validate(input); err != nil {
-		// 同时更新 Prometheus 指标
+		// Increment the rejected-requests counter before returning the error.
 		s.metrics.RejectedRequests.Inc()
 		return &pb.InferResponse{
 			RequestId: req.RequestId,
