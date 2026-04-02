@@ -215,14 +215,25 @@ uv run ruff check .
 ```
 ---
 ## Test and Result
+
+### System Tests (15/15 passed)
 ![](docs/project-dist-test1.png)
 
 ![](docs/project-dist-test2.png)
 
+Key results:
+- Token limit guard: 600-token input correctly rejected (max 512)
+- Batching efficiency: **5.0x speedup** with 8 concurrent requests
+- End-to-end Infer RPC: ~1300ms (Qwen2.5:1.5b on local GPU)
+
+### Rust Unit Tests (4/4 passed) 
+
 ![](docs/project-dist-rust_test.png)
 
+### Compare python, rust and bpe
 ![](docs/project-dist-bench-test.png)
 
+### Grafana Dashboard
 ![](docs/project-dist-grafana1.png)
 
 ![](docs/project-dist-grafana2.png)
