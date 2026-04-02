@@ -289,8 +289,8 @@ def test_grpc():
         channel.close()
 
     except ImportError:
-        print(f"  {YELLOW}SKIP{RESET}  gRPC RPCs — proto stubs not found at ../gen")
-        print(f"         Run: cd .. && buf generate")
+        print(f"{YELLOW}SKIP{RESET}  gRPC RPCs — proto stubs not found at ../gen")
+        print(f"Run: cd .. && buf generate")
 
 
 # ── 4. Concurrency / batching test ────────────────────────────────────────────
