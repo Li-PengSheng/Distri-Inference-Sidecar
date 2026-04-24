@@ -7,12 +7,17 @@
 package vramguard
 
 import (
+	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/metrics"
+	"github.com/NVIDIA/go-nvml/pkg/nvml"
 )
 
 // Config holds the tuning parameters for the VRAM guard.
@@ -30,16 +35,34 @@ type Config struct {
 type Guard struct {
 	cfg         Config
 	circuitOpen atomic.Bool
-	// UsedMB holds the most recent used-VRAM reading (float64) from nvidia-smi.
+	reader      vramReader
+	metrics     *metrics.Metrics
+	// UsedMB holds the most recent used-VRAM reading (float64) in MiB.
 	UsedMB atomic.Value
-	// TotalMB holds the most recent total-VRAM reading (float64) from nvidia-smi.
+	// TotalMB holds the most recent total-VRAM reading (float64) in MiB.
 	TotalMB atomic.Value
 }
 
+type vramReader interface {
+	ReadUsageMB() (used, total float64, err error)
+	Close()
+	Name() string
+}
+
+type nvmlReader struct {
+	device nvml.Device
+}
+
+type smiReader struct{}
+
 // New allocates a Guard with the given configuration and initialises the VRAM
 // counters to zero. Call Start (typically in a goroutine) to begin polling.
-func New(cfg Config) *Guard {
-	g := &Guard{cfg: cfg}
+func New(cfg Config, m *metrics.Metrics) *Guard {
+	g := &Guard{
+		cfg:     cfg,
+		reader:  newVRAMReader(),
+		metrics: m,
+	}
 	g.UsedMB.Store(float64(0))
 	g.TotalMB.Store(float64(0))
 	return g
@@ -56,15 +79,36 @@ func (g *Guard) GetUsage() (float64, float64) {
 	return g.UsedMB.Load().(float64), g.TotalMB.Load().(float64)
 }
 
-// Start polls nvidia-smi at the configured interval and updates the
-// circuit-breaker state accordingly. It runs indefinitely; call it via
-// go g.Start().
+// Start polls VRAM usage through the configured reader (NVML preferred,
+// nvidia-smi fallback) and updates the circuit-breaker state accordingly.
+// It runs indefinitely; call it via go g.Start().
 func (g *Guard) Start() {
+	defer g.reader.Close()
+	mode := g.reader.Name()
+	slog.Info("VRAM guard reader initialized", "mode", mode)
+	if g.metrics != nil {
+		g.metrics.VRAMReaderMode.WithLabelValues("nvml").Set(0)
+		g.metrics.VRAMReaderMode.WithLabelValues("nvidia-smi").Set(0)
+		g.metrics.VRAMReaderMode.WithLabelValues(mode).Set(1)
+	}
+
 	ticker := time.NewTicker(time.Duration(g.cfg.PollIntervalMs) * time.Millisecond)
+	defer ticker.Stop()
+
 	for range ticker.C {
-		used, total, err := queryVRAM()
+		pollStart := time.Now()
+		used, total, err := g.reader.ReadUsageMB()
+		if g.metrics != nil {
+			g.metrics.VRAMPollDurationMs.Observe(float64(time.Since(pollStart).Microseconds()) / 1000.0)
+		}
 		if err != nil {
-			slog.Error("nvidia-smi query failed", "err", err)
+			slog.Error("vram query failed", "mode", g.reader.Name(), "err", err)
+			if g.metrics != nil {
+				g.metrics.VRAMPollErrors.Inc()
+			}
+			continue
+		}
+		if total <= 0 {
 			continue
 		}
 		g.UsedMB.Store(used)
@@ -91,9 +135,82 @@ func (g *Guard) Start() {
 	}
 }
 
+func newVRAMReader() vramReader {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("VRAM_READER_MODE")))
+	if mode == "" {
+		mode = "auto"
+	}
+
+	switch mode {
+	case "smi", "nvidia-smi":
+		slog.Info("VRAM reader mode forced to nvidia-smi")
+		return &smiReader{}
+	case "nvml":
+		reader, ok := newNVMLReader()
+		if ok {
+			return reader
+		}
+		slog.Warn("VRAM_READER_MODE=nvml but NVML unavailable, falling back to nvidia-smi")
+		return &smiReader{}
+	case "auto":
+		// continue to auto mode below
+	default:
+		slog.Warn("unknown VRAM_READER_MODE, using auto", "mode", mode)
+	}
+
+	reader, ok := newNVMLReader()
+	if ok {
+		return reader
+	}
+	return &smiReader{}
+}
+
+func newNVMLReader() (*nvmlReader, bool) {
+	ret := nvml.Init()
+	if ret != nvml.SUCCESS {
+		slog.Warn("NVML init failed", "err", nvml.ErrorString(ret))
+		return nil, false
+	}
+
+	device, ret := nvml.DeviceGetHandleByIndex(0)
+	if ret != nvml.SUCCESS {
+		slog.Warn("NVML device lookup failed", "err", nvml.ErrorString(ret))
+		nvml.Shutdown()
+		return nil, false
+	}
+
+	return &nvmlReader{device: device}, true
+}
+
+func (r *nvmlReader) Name() string { return "nvml" }
+
+func (r *nvmlReader) ReadUsageMB() (used, total float64, err error) {
+	mem, ret := nvml.DeviceGetMemoryInfo(r.device)
+	if ret != nvml.SUCCESS {
+		return 0, 0, fmt.Errorf("nvml DeviceGetMemoryInfo failed: %s", nvml.ErrorString(ret))
+	}
+	const mib = 1024 * 1024
+	return float64(mem.Used) / mib, float64(mem.Total) / mib, nil
+}
+
+func (r *nvmlReader) Close() {
+	ret := nvml.Shutdown()
+	if ret != nvml.SUCCESS {
+		slog.Warn("NVML shutdown failed", "err", nvml.ErrorString(ret))
+	}
+}
+
+func (r *smiReader) Name() string { return "nvidia-smi" }
+
+func (r *smiReader) ReadUsageMB() (used, total float64, err error) {
+	return queryVRAMViaSMI()
+}
+
+func (r *smiReader) Close() {}
+
 // queryVRAM runs nvidia-smi and parses used and total VRAM in megabytes.
 // It returns an error if nvidia-smi is unavailable or produces unexpected output.
-func queryVRAM() (used, total float64, err error) {
+func queryVRAMViaSMI() (used, total float64, err error) {
 	out, err := exec.Command(
 		"nvidia-smi",
 		"--query-gpu=memory.used,memory.total",

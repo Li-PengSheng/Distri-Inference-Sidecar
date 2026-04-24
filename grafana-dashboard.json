@@ -1,0 +1,274 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total Requests (since restart)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(batch_size_sum)" }],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": 0 }] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Total Batches (since restart)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(batch_size_count)" }],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": 0 }] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Rejected (Token Limit)",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(rejected_requests_total)" }],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": 0 }, { "color": "red", "value": 1 }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "VRAM Used (MB)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "vram_used_mb" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decmbytes",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": 0 }, { "color": "orange", "value": 6000 }, { "color": "red", "value": 7500 }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Inference Latency (p50/p95/p99)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(infer_latency_ms_bucket[$__rate_interval])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(infer_latency_ms_bucket[$__rate_interval])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(infer_latency_ms_bucket[$__rate_interval])))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Batch Size + Request Rate",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(batch_size_bucket[$__rate_interval])))",
+          "legendFormat": "batch p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(batch_size_bucket[$__rate_interval])))",
+          "legendFormat": "batch p95"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(batch_size_sum[$__rate_interval]))",
+          "legendFormat": "req/s"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Token Rejections + Circuit Trips (per second)",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(rejected_requests_total[$__rate_interval]))",
+          "legendFormat": "token rejected/s"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(circuit_breaker_trips_total[$__rate_interval]))",
+          "legendFormat": "cb trip/s"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "VRAM Poll Duration (p50/p95 ms)",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(vram_poll_duration_ms_bucket[$__rate_interval])))",
+          "legendFormat": "poll p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(vram_poll_duration_ms_bucket[$__rate_interval])))",
+          "legendFormat": "poll p95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "VRAM Poll Errors (per second)",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(vram_poll_errors_total[$__rate_interval]))",
+          "legendFormat": "errors/s"
+        }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "VRAM Reader Mode",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "vram_reader_mode{mode=\"nvml\"}",
+          "legendFormat": "nvml"
+        },
+        {
+          "refId": "B",
+          "expr": "vram_reader_mode{mode=\"nvidia-smi\"}",
+          "legendFormat": "nvidia-smi"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "gray", "value": 0 }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value_and_name"
+      }
+    }
+  ],
+  "preload": false,
+  "refresh": "5s",
+  "schemaVersion": 42,
+  "tags": ["sidecar", "llm", "nvml", "observability"],
+  "templating": { "list": [] },
+  "time": { "from": "now-30m", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Distri-Inference-Sidecar — Production Dashboard",
+  "uid": "distri-sidecar-prod-v1",
+  "version": 1,
+  "weekStart": ""
+}
