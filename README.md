@@ -44,6 +44,17 @@ vramguard.Start()
 metrics exposed at :9090/metrics
 ```
 
+Authoritative token-limit enforcement is performed at sidecar ingress (`grpcserver` + `internal/tokenizer`). The Python backend is execution-only and does not perform token admission checks.
+
+---
+
+## Responsibility Boundary
+
+- **Admission control (authoritative):** sidecar ingress (`grpcserver.Infer -> tokenizer.Validate`)
+- **Circuit protection:** sidecar VRAM guard (`internal/vramguard`)
+- **Execution only:** backend `/infer` forwards requests to model runtime and returns results
+- **Benchmark only:** `python_backend/benchmark/tokenizer_bench.py` evaluates ctypes/FFI boundary overhead; it is not a production policy path
+
 ---
 
 ## Prerequisites
@@ -80,6 +91,9 @@ cd python_backend
 uv sync
 uv run uvicorn main:app --host 0.0.0.0 --port 8000
 
+# optional: verify backend is in pure-execution mode
+curl -s http://localhost:8000/health
+
 # terminal 2: sidecar
 cd ..
 go build ./cmd/sidecar
@@ -90,14 +104,19 @@ BACKEND_URL=http://localhost:8000/infer ./sidecar
 
 ## Configuration
 
+Environment variables:
+
 | Key | Default | Description |
 |---|---|---|
 | `BACKEND_URL` | required | backend `/infer` endpoint |
-| `VRAM_READER_MODE` | `auto` | default behavior is **NVML first** in `auto`; fallback to `nvidia-smi` only when NVML is unavailable. Can force `nvml` or `smi` |
-| `PollIntervalMs` | `500` | VRAM polling interval |
-| `OOMThresholdPct` | `90` | circuit-breaker threshold |
-| `MaxBatchSize` | `8` | max requests per flush |
-| `MaxWaitMs` | `50` | max wait before partial flush |
+| `VRAM_READER_MODE` | `auto` | **NVML-first** in `auto`; falls back to `nvidia-smi` only when NVML is unavailable. Can force `nvml` or `smi` |
+
+Current sidecar runtime defaults (wired in `cmd/sidecar/main.go`):
+
+- `PollIntervalMs = 500`
+- `OOMThresholdPct = 90`
+- `MaxBatchSize = 8`
+- `MaxWaitMs = 50`
 
 ---
 
@@ -116,14 +135,20 @@ Core metrics:
 
 - `infer_latency_ms` (histogram)
 - `batch_size` (histogram)
-- `rejected_requests_total`
-- `circuit_breaker_trips_total`
+- `rejected_requests_total` (token-limit rejections at sidecar ingress)
+- `circuit_breaker_trips_total` (VRAM guard rejections)
 - `infer_success_total`
 - `infer_errors_total`
 - `vram_used_mb`
 - `vram_poll_duration_ms`
 - `vram_poll_errors_total`
 - `vram_reader_mode{mode="nvml|nvidia-smi"}`
+
+Dashboard topline convention:
+
+- `Accepted = batch_size_sum`
+- `Rejected = rejected_requests_total + circuit_breaker_trips_total`
+- `Input Total = Accepted + Rejected`
 
 ---
 
@@ -150,6 +175,8 @@ cd python_backend
 uv run test.py --concurrent 100 --rounds 5 --expected-reader-mode nvidia-smi
 ```
 
+Result screenshots are stored in `docs/`.
+
 Screenshots:
 
 - SMI mode: ![](docs/smi.png)
@@ -174,7 +201,8 @@ Benchmark screenshot:
 
 Notes:
 
-- whitespace counting: FFI overhead is amortized and Rust/PyO3 shows ~2x+ speedup over pure Python
+- benchmark focuses on binding-boundary overhead (ctypes/FFI), not production policy admission
+- whitespace counting: FFI overhead is amortized and Rust FFI shows ~2x+ speedup over pure Python
 - BPE encode: the dominant bottleneck is algorithm complexity in the current BPE implementation, not the binding layer
 - takeaway: FFI acceleration is most effective when compute dominates boundary overhead; for high-frequency short calls, batch APIs are needed to amortize crossing cost
 - output explicitly marks whether batch path is true FFI (`[ffi batch]`) or fallback
@@ -191,7 +219,7 @@ internal/metrics/       # Prometheus metrics
 internal/tokenizer/     # Go <-> Rust tokenizer bridge
 internal/vramguard/     # NVML/smi VRAM circuit breaker
 python_backend/         # FastAPI backend and tests
-rust_ops/               # Rust tokenizer + C ABI + PyO3 module
+rust_ops/               # Rust tokenizer + C ABI
 docs/                   # result screenshots
 ```
 

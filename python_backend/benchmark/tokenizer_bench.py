@@ -2,6 +2,9 @@ import time
 import ctypes
 from pathlib import Path
 
+# Benchmark-only script: evaluates Python<->Rust binding overhead and tokenizer
+# throughput. It does not participate in production admission decisions.
+
 LIB_PATH = (
     Path(__file__).resolve().parents[2]
     / "rust_ops"
@@ -10,10 +13,6 @@ LIB_PATH = (
     / "librust_ops.so"
 )
 lib = ctypes.CDLL(str(LIB_PATH))
-try:
-    import rust_ops as rust_ops_py
-except ImportError:
-    rust_ops_py = None
 
 print(f"Loaded Rust library: {LIB_PATH}")
 
@@ -45,8 +44,6 @@ print(
 
 TRAIN_TEXT = "hello world foo bar " * 500  # 缩小语料
 lib.bpe_train(TRAIN_TEXT.encode(), 50)     # vocab_size 改成 50
-if rust_ops_py is not None:
-    rust_ops_py.py_bpe_train(TRAIN_TEXT, 50)
 
 # BPE encode 也用小一点的文本
 texts_bpe = ["hello world foo bar " * 30] * 10000  # 缩短文本
@@ -102,41 +99,8 @@ else:
     rust_bpe_batch_time = time.perf_counter() - start
     rust_bpe_batch_mode = "fallback loop"
 
-pyo3_ws_time = None
-pyo3_ws_batch_time = None
-pyo3_bpe_time = None
-pyo3_bpe_batch_time = None
-
-if rust_ops_py is not None:
-    start = time.perf_counter()
-    for t in texts_bpe:
-        rust_ops_py.py_tokenize_len(t)
-    pyo3_ws_time = time.perf_counter() - start
-
-    start = time.perf_counter()
-    rust_ops_py.py_tokenize_len_batch(texts_bpe)
-    pyo3_ws_batch_time = time.perf_counter() - start
-
-    start = time.perf_counter()
-    for t in texts_bpe:
-        rust_ops_py.py_bpe_encode_len(t)
-    pyo3_bpe_time = time.perf_counter() - start
-
-    start = time.perf_counter()
-    rust_ops_py.py_bpe_encode_len_batch(texts_bpe)
-    pyo3_bpe_batch_time = time.perf_counter() - start
-
 print(f"Python whitespace:  {python_time:.3f}s")
 print(f"Rust whitespace:    {rust_ws_time:.3f}s  ({python_time/rust_ws_time:.1f}x)")
 print(f"Rust BPE encode:    {rust_bpe_time:.3f}s  ({python_time/rust_bpe_time:.1f}x)")
 print(f"Rust ws batch:      {rust_ws_batch_time:.3f}s  ({python_time/rust_ws_batch_time:.1f}x)  [{rust_ws_batch_mode}]")
 print(f"Rust BPE batch:     {rust_bpe_batch_time:.3f}s  ({python_time/rust_bpe_batch_time:.1f}x)  [{rust_bpe_batch_mode}]")
-
-if pyo3_ws_time is not None:
-    print(f"PyO3 whitespace:    {pyo3_ws_time:.3f}s  ({python_time/pyo3_ws_time:.1f}x)")
-    print(f"PyO3 ws batch:      {pyo3_ws_batch_time:.3f}s  ({python_time/pyo3_ws_batch_time:.1f}x)")
-    print(f"PyO3 BPE encode:    {pyo3_bpe_time:.3f}s  ({python_time/pyo3_bpe_time:.1f}x)")
-    print(f"PyO3 BPE batch:     {pyo3_bpe_batch_time:.3f}s  ({python_time/pyo3_bpe_batch_time:.1f}x)")
-else:
-    print("PyO3:               N/A (module not installed)")
-    print("Install hint:       cd ../../rust_ops && maturin develop --release --features python")

@@ -8,10 +8,3 @@ edition = "2024"
 # CGo) or any other C-compatible consumer.
 name = "rust_ops"
 crate-type = ["cdylib","staticlib"]
-
-[features]
-default = []
-python = ["dep:pyo3"]
-
-[dependencies]
-pyo3 = { version = "0.22", optional = true, features = ["extension-module"] }

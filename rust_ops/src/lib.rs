@@ -11,9 +11,6 @@ mod bpe_token;
 use bpe_token::BPETokenizer;
 static TOKENIZER: OnceLock<BPETokenizer> = OnceLock::new();
 
-#[cfg(feature = "python")]
-use pyo3::prelude::*;
-
 /// free_string releases a C string that was previously allocated by Rust with
 /// `CString::into_raw`. Do not call this on strings allocated outside Rust.
 ///
@@ -118,69 +115,4 @@ pub extern "C" fn bpe_encode_len_batch(inputs: *const *const c_char, len: usize)
         total += tok.encode(s).len() as i64;
     }
     total
-}
-
-#[cfg(feature = "python")]
-#[pyfunction]
-fn py_tokenize_len(input: &str) -> usize {
-    input.split_whitespace().count()
-}
-
-#[cfg(feature = "python")]
-#[pyfunction]
-fn py_tokenize_len_batch(inputs: Vec<String>) -> usize {
-    inputs
-        .iter()
-        .map(|s| s.split_whitespace().count())
-        .sum()
-}
-
-#[cfg(feature = "python")]
-#[pyfunction]
-fn py_tokenize_lens(inputs: Vec<String>) -> Vec<usize> {
-    inputs
-        .iter()
-        .map(|s| s.split_whitespace().count())
-        .collect()
-}
-
-#[cfg(feature = "python")]
-#[pyfunction]
-fn py_bpe_train(text: &str, vocab_size: usize) {
-    let mut tok = BPETokenizer::new(vocab_size);
-    tok.train(text, vocab_size);
-    let _ = TOKENIZER.set(tok);
-}
-
-#[cfg(feature = "python")]
-#[pyfunction]
-fn py_bpe_encode_len(input: &str) -> Option<usize> {
-    TOKENIZER.get().map(|tok| tok.encode(input).len())
-}
-
-#[cfg(feature = "python")]
-#[pyfunction]
-fn py_bpe_encode_len_batch(inputs: Vec<String>) -> Option<usize> {
-    let tok = TOKENIZER.get()?;
-    Some(inputs.iter().map(|s| tok.encode(s).len()).sum())
-}
-
-#[cfg(feature = "python")]
-#[pyfunction]
-fn py_bpe_encode_lens(inputs: Vec<String>) -> Option<Vec<usize>> {
-    let tok = TOKENIZER.get()?;
-    Some(inputs.iter().map(|s| tok.encode(s).len()).collect())
-}
-
-#[cfg(feature = "python")]
-#[pymodule]
-fn rust_ops(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(py_tokenize_len, m)?)?;
-    m.add_function(wrap_pyfunction!(py_tokenize_len_batch, m)?)?;
-    m.add_function(wrap_pyfunction!(py_tokenize_lens, m)?)?;
-    m.add_function(wrap_pyfunction!(py_bpe_train, m)?)?;
-    m.add_function(wrap_pyfunction!(py_bpe_encode_len, m)?)?;
-    m.add_function(wrap_pyfunction!(py_bpe_encode_len_batch, m)?)?;
-    m.add_function(wrap_pyfunction!(py_bpe_encode_lens, m)?)?;
-    Ok(())
 }
