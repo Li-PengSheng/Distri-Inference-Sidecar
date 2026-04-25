@@ -11,8 +11,6 @@ LIB_PATH = (
 )
 lib = ctypes.CDLL(str(LIB_PATH))
 
-print(f"Loaded Rust library: {LIB_PATH}")
-
 # 原有接口
 lib.tokenize_len.restype = ctypes.c_int
 lib.tokenize_len.argtypes = [ctypes.c_char_p]
@@ -32,12 +30,6 @@ bpe_encode_len_batch = getattr(lib, "bpe_encode_len_batch", None)
 if bpe_encode_len_batch is not None:
     bpe_encode_len_batch.restype = ctypes.c_longlong
     bpe_encode_len_batch.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t]
-
-print(
-    "CTypes batch symbols:",
-    f"tokenize_len_batch={'yes' if tokenize_len_batch is not None else 'no'}",
-    f"bpe_encode_len_batch={'yes' if bpe_encode_len_batch is not None else 'no'}",
-)
 
 TRAIN_TEXT = "hello world foo bar " * 500  # 缩小语料
 lib.bpe_train(TRAIN_TEXT.encode(), 50)     # vocab_size 改成 50
@@ -102,8 +94,3 @@ print(f"Rust ws batch:      {rust_ws_batch_time:.3f}s  ({python_ws_time/rust_ws_
 print()
 print(f"Rust BPE encode:    {rust_bpe_time:.3f}s")
 print(f"Rust BPE batch:     {rust_bpe_batch_time:.3f}s  ({rust_bpe_time/rust_bpe_batch_time:.2f}x vs Rust BPE single)  [{rust_bpe_batch_mode}]")
-print()
-print("Benchmark note:")
-print("- Python baseline here is whitespace splitting only.")
-print("- Rust BPE numbers are not directly comparable to Python whitespace timing.")
-print("- For apples-to-apples BPE comparison, use an equivalent Python BPE tokenizer implementation.")
