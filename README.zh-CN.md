@@ -179,8 +179,8 @@ uv run test.py --concurrent 100 --rounds 5 --expected-reader-mode nvidia-smi
 
 截图：
 
-- SMI：![](docs/smi.png)
-- NVML：![](docs/nvml.png)
+- SMI：![](docs/smi_v2.png)
+- NVML：![](docs/nvml_v2.png)
 
 结论：
 
@@ -197,7 +197,7 @@ uv run tokenizer_bench.py
 
 截图：
 
-![](docs/rustvspy.png)
+![](docs/rustvspy_v2.png)
 
 说明：
 

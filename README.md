@@ -179,8 +179,8 @@ Result screenshots are stored in `docs/`.
 
 Screenshots:
 
-- SMI mode: ![](docs/smi.png)
-- NVML mode: ![](docs/nvml.png)
+- SMI mode: ![](docs/smi_v2.png)
+- NVML mode: ![](docs/nvml_v2.png)
 
 Observed outcome:
 
@@ -197,7 +197,7 @@ uv run tokenizer_bench.py
 
 Benchmark screenshot:
 
-![](docs/rustvspy.png)
+![](docs/rustvspy_v2.png)
 
 Notes:
 
