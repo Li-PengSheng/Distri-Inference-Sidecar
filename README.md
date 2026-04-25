@@ -174,8 +174,9 @@ Benchmark screenshot:
 
 Notes:
 
-- whitespace counting benefits from Rust/PyO3 binding speed
-- BPE encode is algorithm-dominated
+- whitespace counting: FFI overhead is amortized and Rust/PyO3 shows ~2x+ speedup over pure Python
+- BPE encode: the dominant bottleneck is algorithm complexity in the current BPE implementation, not the binding layer
+- takeaway: FFI acceleration is most effective when compute dominates boundary overhead; for high-frequency short calls, batch APIs are needed to amortize crossing cost
 - output explicitly marks whether batch path is true FFI (`[ffi batch]`) or fallback
 
 ---

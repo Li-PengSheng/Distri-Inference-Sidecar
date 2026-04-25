@@ -174,8 +174,9 @@ uv run tokenizer_bench.py
 
 说明：
 
-- whitespace 路径 Rust/PyO3 明显快于 Python
-- BPE 编码主要受算法本体影响
+- whitespace 场景：FFI 边界开销可被摊薄，Rust/PyO3 相比纯 Python 有约 2x+ 提升
+- BPE encode 场景：当前瓶颈主要在算法复杂度，而非绑定层
+- 结论：当计算开销主导时 FFI 加速更有效；高频短调用需要批量接口来摊薄边界成本
 - 输出会标注 batch 是否为真实 FFI（`[ffi batch]`）还是回退路径
 
 ---
