@@ -23,6 +23,16 @@ type Metrics struct {
 	// VRAMUsedMB reports the current GPU VRAM consumption in megabytes.
 	VRAMUsedMB       prometheus.Gauge
 	RejectedRequests prometheus.Counter
+	// VRAMPollDurationMs tracks the time spent reading VRAM usage.
+	VRAMPollDurationMs prometheus.Histogram
+	// VRAMPollErrors counts failures while polling VRAM metrics.
+	VRAMPollErrors prometheus.Counter
+	// VRAMReaderMode indicates active reader mode (1=active, 0=inactive).
+	VRAMReaderMode *prometheus.GaugeVec
+	// InferSuccess counts per-request successful inference fan-out results.
+	InferSuccess prometheus.Counter
+	// InferErrors counts per-request inference failures (backend/batch/fan-out).
+	InferErrors prometheus.Counter
 }
 
 // New registers all Prometheus metrics and starts the /metrics HTTP server on
@@ -52,6 +62,27 @@ func New() *Metrics {
 			Name: "rejected_requests_total",
 			Help: "Requests rejected by the tokenizer",
 		}),
+		VRAMPollDurationMs: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "vram_poll_duration_ms",
+			Help:    "Duration of VRAM polling operation in milliseconds",
+			Buckets: []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 50, 100},
+		}),
+		VRAMPollErrors: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "vram_poll_errors_total",
+			Help: "Total errors encountered during VRAM polling",
+		}),
+		VRAMReaderMode: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "vram_reader_mode",
+			Help: "Active VRAM reader mode (1 active, 0 inactive)",
+		}, []string{"mode"}),
+		InferSuccess: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "infer_success_total",
+			Help: "Total successful inference results returned to callers",
+		}),
+		InferErrors: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "infer_errors_total",
+			Help: "Total inference errors returned to callers",
+		}),
 	}
 
 	prometheus.MustRegister(
@@ -60,6 +91,11 @@ func New() *Metrics {
 		m.CircuitBreakerTrips,
 		m.VRAMUsedMB,
 		m.RejectedRequests,
+		m.VRAMPollDurationMs,
+		m.VRAMPollErrors,
+		m.VRAMReaderMode,
+		m.InferSuccess,
+		m.InferErrors,
 	)
 
 	// Expose /metrics for Prometheus scraping

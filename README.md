@@ -1,246 +1,217 @@
 # Distri-Inference-Sidecar
 
-A lightweight **gRPC sidecar** that sits next to an AI inference backend and provides:
+[简体中文文档](README.zh-CN.md)
 
-- **Dynamic request batching** – collects individual gRPC requests into micro-batches before forwarding them to the backend, trading a small amount of latency for significantly higher throughput. The batch wait window shrinks automatically at low QPS and grows at high QPS.
-- **VRAM circuit-breaker** – polls GPU memory via `nvidia-smi` and rejects new requests while utilisation is above a configurable threshold, preventing out-of-memory crashes.
-- **Prometheus metrics** – exposes inference latency, batch-size distribution, circuit-breaker trip counts, and live VRAM usage on `:9090/metrics`.
-- **Rust BPE tokenizer library** – a C-ABI static library (`rust_ops`) implementing a Byte-Pair Encoding tokenizer, linked into the Go sidecar via CGo. Used to validate prompt lengths and reject inputs that exceed the 512-token limit.
+A lightweight production-style **gRPC inference sidecar** that provides:
+
+- dynamic micro-batching for throughput
+- token-limit guard backed by a Rust tokenizer
+- VRAM-aware circuit breaker
+- Prometheus/Grafana observability
+- **NVML-first** GPU polling with `nvidia-smi` fallback
+
+---
+
+## Features
+
+- **Dynamic batching** (`internal/batcher`)
+  - queues single requests and flushes micro-batches to backend
+  - adaptive wait window based on observed QPS
+- **Token limit guard** (`internal/tokenizer`, `rust_ops`)
+  - rejects oversized prompts before expensive backend calls
+- **VRAM guard** (`internal/vramguard`)
+  - opens circuit when VRAM utilization crosses threshold
+  - supports `VRAM_READER_MODE=auto|nvml|smi`
+- **Observability** (`internal/metrics`)
+  - request/batch/success/error metrics
+  - VRAM reader mode and polling quality metrics
 
 ---
 
 ## Architecture
 
-```
-gRPC client
-     │  :50051
-     ▼
-┌─────────────────────────────────┐
-│          gRPC Server            │  internal/grpcserver
-│  Infer()  │  HealthCheck()      │
-└────────────────┬────────────────┘
-                 │ Submit()
-                 ▼
-┌─────────────────────────────────┐
-│            Batcher              │  internal/batcher
-│  queue → collectBatch()         │
-│          flushBatch()  ─────────┼──► POST /infer  (Python backend :8000)
-└────────────────┬────────────────┘
-                 │ IsOpen()
-                 ▼
-┌─────────────────────────────────┐
-│          VRAM Guard             │  internal/vramguard
-│  polls nvidia-smi every 500 ms  │
-│  circuit open when VRAM ≥ 90 %  │
-└─────────────────────────────────┘
+```text
+gRPC client (:50051)
+    -> grpcserver.Infer()
+       -> tokenizer.Validate()
+       -> batcher.Submit()
+          -> flushBatch() -> HTTP /infer (python_backend:8000)
 
-Prometheus metrics exposed on :9090/metrics  (internal/metrics)
+vramguard.Start()
+    -> reader: NVML (preferred) or nvidia-smi fallback
+    -> circuit open/close state
+
+metrics exposed at :9090/metrics
 ```
 
 ---
 
 ## Prerequisites
 
-| Tool | Purpose |
-|------|---------|
-| Go ≥ 1.21 | Build the sidecar |
-| `nvidia-smi` | GPU VRAM polling (NVIDIA drivers required) |
-| Python ≥ 3.12 + [uv](https://github.com/astral-sh/uv) | Run the mock backend |
-| Rust ≥ 1.85 (edition 2024) | Build `rust_ops` static library |
-| `protoc` + `buf` | Regenerate protobuf stubs (development only) |
-| Docker + Docker Compose | Run the full stack (optional) |
+- Go 1.25+
+- Rust 1.85+
+- Python 3.12+ with `uv`
+- NVIDIA driver + NVML available
+- Docker + Docker Compose (recommended)
 
 ---
 
 ## Quick Start
 
-### 1. Build and run the sidecar
+### Docker Compose (recommended)
 
 ```bash
-go build ./cmd/sidecar
-./sidecar
+docker compose -p distribute up -d --build
 ```
 
-### 2. Start the Python mock backend
+Services:
 
-The backend forwards prompts to an Ollama instance (model `qwen2.5:1.5b` by default) and must be able to reach it at `http://host.docker.internal:11434`.
+- backend: `:8000`
+- sidecar gRPC: `:50051`
+- sidecar metrics: `:9091` (container `:9090`)
+- prometheus: `:9090`
+- grafana: `:3000`
+
+### Local run (manual)
 
 ```bash
+# terminal 1: backend
 cd python_backend
 uv sync
 uv run uvicorn main:app --host 0.0.0.0 --port 8000
+
+# terminal 2: sidecar
+cd ..
+go build ./cmd/sidecar
+BACKEND_URL=http://localhost:8000/infer ./sidecar
 ```
-
-### 3. (Optional) Build the Rust static library
-
-```bash
-cd rust_ops
-cargo build --release
-```
-
-The compiled library (`librust_ops.a`) can then be linked into Go or C code via CGo.
-
-### 4. Run the full stack with Docker Compose
-
-Starts the Python backend, Go sidecar, Prometheus, and Grafana.
-
-```bash
-docker-compose up --build
-```
-
-| Service | Port | Description |
-|---------|------|-------------|
-| backend | `8000` | Python FastAPI → Ollama proxy |
-| sidecar | `50051` / `9090` | gRPC server / Prometheus metrics |
-| prometheus | `9091` | Prometheus UI |
-| grafana | `3000` | Grafana dashboard |
 
 ---
 
 ## Configuration
 
-The sidecar is configured directly in `cmd/sidecar/main.go`. Key parameters:
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `MaxBatchSize` | `8` | Maximum number of requests per batch flush |
-| `MaxWaitMs` | `50` | Maximum time (ms) to wait before flushing an incomplete batch (scales down automatically at low QPS) |
-| `BackendURL` | `$BACKEND_URL` | HTTP endpoint of the inference backend |
-| `PollIntervalMs` | `500` | How often (ms) to query `nvidia-smi` for VRAM usage |
-| `OOMThresholdPct` | `90.0` | VRAM utilisation (%) at which the circuit-breaker opens |
-| gRPC address | `:50051` | Listening address of the gRPC server |
-| Metrics address | `:9090` | Listening address of the Prometheus metrics endpoint |
+| Key | Default | Description |
+|---|---|---|
+| `BACKEND_URL` | required | backend `/infer` endpoint |
+| `VRAM_READER_MODE` | `auto` | default behavior is **NVML first** in `auto`; fallback to `nvidia-smi` only when NVML is unavailable. Can force `nvml` or `smi` |
+| `PollIntervalMs` | `500` | VRAM polling interval |
+| `OOMThresholdPct` | `90` | circuit-breaker threshold |
+| `MaxBatchSize` | `8` | max requests per flush |
+| `MaxWaitMs` | `50` | max wait before partial flush |
 
 ---
 
 ## gRPC API
 
-The service contract is defined in [`proto/inference.proto`](proto/inference.proto).
+Defined in `proto/inference.proto`:
 
-### `Infer`
-
-Send a single inference request. The sidecar validates the prompt length (max 512 BPE tokens), then batches the request transparently before forwarding to the backend.
-
-```proto
-rpc Infer(InferRequest) returns (InferResponse);
-```
-
-**Request**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `request_id` | `string` | Unique identifier for correlating the response |
-| `input_data` | `bytes` | Serialised model input (format is model-specific) |
-| `model_name` | `string` | Name of the model to run on the backend |
-
-**Response**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `request_id` | `string` | Echoed from the request |
-| `output_data` | `bytes` | Serialised model output |
-| `latency_ms` | `int64` | End-to-end backend latency in milliseconds |
-| `error` | `string` | Non-empty if the request failed |
-
-### `HealthCheck`
-
-Returns current VRAM usage and circuit-breaker state.
-
-```proto
-rpc HealthCheck(HealthRequest) returns (HealthResponse);
-```
-
-**Response**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `healthy` | `bool` | `true` when the circuit-breaker is closed (accepting requests) |
-| `vram_used_mb` | `float` | GPU VRAM currently in use (MB) |
-| `vram_total_mb` | `float` | Total GPU VRAM available (MB) |
+- `Infer(InferRequest) returns (InferResponse)`
+- `HealthCheck(HealthRequest) returns (HealthResponse)`
 
 ---
 
-## Prometheus Metrics
+## Metrics
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `infer_latency_ms` | Histogram | End-to-end backend latency per batch flush |
-| `batch_size` | Histogram | Number of requests in each flushed batch |
-| `circuit_breaker_trips_total` | Counter | Requests rejected because the VRAM circuit is open |
-| `vram_used_mb` | Gauge | Current GPU VRAM usage in MB |
-| `rejected_requests_total` | Counter | Requests rejected by the tokenizer (prompt exceeds 512 tokens) |
+Core metrics:
+
+- `infer_latency_ms` (histogram)
+- `batch_size` (histogram)
+- `rejected_requests_total`
+- `circuit_breaker_trips_total`
+- `infer_success_total`
+- `infer_errors_total`
+- `vram_used_mb`
+- `vram_poll_duration_ms`
+- `vram_poll_errors_total`
+- `vram_reader_mode{mode="nvml|nvidia-smi"}`
+
+---
+
+## Tests and Results
+
+### 1) End-to-end system test (gRPC sidecar path)
+
+```bash
+cd python_backend
+uv run test.py --concurrent 100 --rounds 5 --expected-reader-mode nvml
+```
+
+### 2) NVML vs SMI A/B test (same load)
+
+```bash
+# NVML run
+VRAM_READER_MODE=nvml docker compose -p distribute up -d --build --force-recreate
+cd python_backend
+uv run test.py --concurrent 100 --rounds 5 --expected-reader-mode nvml
+
+# SMI run
+VRAM_READER_MODE=smi docker compose -p distribute up -d --build --force-recreate
+cd python_backend
+uv run test.py --concurrent 100 --rounds 5 --expected-reader-mode nvidia-smi
+```
+
+Screenshots:
+
+- SMI mode: ![](docs/smi.png)
+- NVML mode: ![](docs/nvml.png)
+
+Observed outcome:
+
+- reader mode switches correctly (`nvml=1` vs `nvidia-smi=1`)
+- VRAM poll p95 drops from tens of ms (SMI) to sub-ms (NVML)
+- no obvious request-outcome regression under the same load
+
+### 3) Python vs Rust tokenizer benchmark
+
+```bash
+cd python_backend/benchmark
+uv run tokenizer_bench.py
+```
+
+Benchmark screenshot:
+
+![](docs/rustvspy.png)
+
+Notes:
+
+- whitespace counting benefits from Rust/PyO3 binding speed
+- BPE encode is algorithm-dominated
+- output explicitly marks whether batch path is true FFI (`[ffi batch]`) or fallback
 
 ---
 
 ## Project Structure
 
-```
-.
-├── cmd/sidecar/          # Main entry point
-├── internal/
-│   ├── batcher/          # Dynamic request batcher (QPS-adaptive wait window)
-│   ├── grpcserver/       # gRPC server implementation
-│   ├── metrics/          # Prometheus metrics setup
-│   ├── tokenizer/        # CGo wrapper for the Rust token-counting library
-│   └── vramguard/        # GPU VRAM circuit-breaker
-├── proto/                # Protobuf service definition
-├── gen/                  # Auto-generated Go protobuf stubs
-├── python_backend/       # FastAPI backend that proxies requests to Ollama
-├── rust_ops/             # Rust static library (C ABI) – BPE tokenizer implementation
-├── buf.yaml              # Buf configuration for protobuf linting
-├── buf.gen.yaml          # Buf code-generation configuration
-└── docker-compose.yaml   # Full-stack Docker Compose setup
+```text
+cmd/sidecar/            # entrypoint
+internal/batcher/       # dynamic micro-batching
+internal/grpcserver/    # gRPC API implementation
+internal/metrics/       # Prometheus metrics
+internal/tokenizer/     # Go <-> Rust tokenizer bridge
+internal/vramguard/     # NVML/smi VRAM circuit breaker
+python_backend/         # FastAPI backend and tests
+rust_ops/               # Rust tokenizer + C ABI + PyO3 module
+docs/                   # result screenshots
 ```
 
 ---
 
 ## Development
 
-### Regenerate protobuf stubs
-
 ```bash
+# regenerate protobuf stubs
 buf generate
-```
 
-### Lint Go code
+# go sanity
+go test ./...
 
-```bash
-go vet ./...
-```
-
-### Lint Python code
-
-```bash
+# python lint
 cd python_backend
 uv run ruff check .
 ```
----
-## Test and Result
-
-### System Tests (15/15 passed)
-![](docs/project-dist-test1.png)
-
-![](docs/project-dist-test2.png)
-
-Key results:
-- Token limit guard: 600-token input correctly rejected (max 512)
-- Batching efficiency: **5.0x speedup** with 8 concurrent requests
-- End-to-end Infer RPC: ~1300ms (Qwen2.5:1.5b on local GPU)
-
-### Rust Unit Tests (4/4 passed) 
-
-![](docs/project-dist-rust_test.png)
-
-### Compare python, rust and bpe
-![](docs/project-dist-bench-test.png)
-
-### Grafana Dashboard
-![](docs/project-dist-grafana1.png)
-
-![](docs/project-dist-grafana2.png)
 
 ---
 
 ## License
 
-This project is provided as-is for educational and experimental purposes.
+This project is for educational and experimental use.

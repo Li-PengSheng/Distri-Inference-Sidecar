@@ -36,7 +36,7 @@ func main() {
 	vg := vramguard.New(vramguard.Config{
 		PollIntervalMs:  500,
 		OOMThresholdPct: 90.0,
-	})
+	}, m)
 	go vg.Start()
 
 	// Sync VRAM reading into Prometheus gauge every 5s
