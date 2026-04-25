@@ -202,8 +202,9 @@ Benchmark screenshot:
 Notes:
 
 - benchmark focuses on binding-boundary overhead (ctypes/FFI), not production policy admission
-- whitespace counting: FFI overhead is amortized and Rust FFI shows ~2x+ speedup over pure Python
+- whitespace counting is an apples-to-apples baseline (Python split vs Rust split), where FFI overhead is amortized and Rust FFI can show speedup
 - BPE encode: the dominant bottleneck is algorithm complexity in the current BPE implementation, not the binding layer
+- do not compare Rust BPE timing directly against Python whitespace timing; they are different workloads
 - takeaway: FFI acceleration is most effective when compute dominates boundary overhead; for high-frequency short calls, batch APIs are needed to amortize crossing cost
 - output explicitly marks whether batch path is true FFI (`[ffi batch]`) or fallback
 

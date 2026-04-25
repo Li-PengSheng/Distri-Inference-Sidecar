@@ -202,8 +202,9 @@ uv run tokenizer_bench.py
 说明：
 
 - benchmark 仅用于评估绑定层边界开销（ctypes/FFI），不是线上策略入口
-- whitespace 场景：FFI 边界开销可被摊薄，Rust FFI 相比纯 Python 有约 2x+ 提升
+- whitespace 场景是同口径对比（Python split vs Rust split）；在该口径下 FFI 边界开销可被摊薄，Rust FFI 可体现加速
 - BPE encode 场景：当前瓶颈主要在算法复杂度，而非绑定层
+- 不要把 Rust BPE 时间直接和 Python whitespace 时间做倍数对比，这不是同一工作负载
 - 结论：当计算开销主导时 FFI 加速更有效；高频短调用需要批量接口来摊薄边界成本
 - 输出会标注 batch 是否为真实 FFI（`[ffi batch]`）还是回退路径
 

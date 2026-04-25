@@ -2,9 +2,6 @@ import time
 import ctypes
 from pathlib import Path
 
-# Benchmark-only script: evaluates Python<->Rust binding overhead and tokenizer
-# throughput. It does not participate in production admission decisions.
-
 LIB_PATH = (
     Path(__file__).resolve().parents[2]
     / "rust_ops"
@@ -57,7 +54,7 @@ def python_tokenize(text):
 start = time.perf_counter()
 for t in texts_bpe:
     python_tokenize(t)
-python_time = time.perf_counter() - start
+python_ws_time = time.perf_counter() - start
 
 # Rust whitespace
 start = time.perf_counter()
@@ -99,8 +96,14 @@ else:
     rust_bpe_batch_time = time.perf_counter() - start
     rust_bpe_batch_mode = "fallback loop"
 
-print(f"Python whitespace:  {python_time:.3f}s")
-print(f"Rust whitespace:    {rust_ws_time:.3f}s  ({python_time/rust_ws_time:.1f}x)")
-print(f"Rust BPE encode:    {rust_bpe_time:.3f}s  ({python_time/rust_bpe_time:.1f}x)")
-print(f"Rust ws batch:      {rust_ws_batch_time:.3f}s  ({python_time/rust_ws_batch_time:.1f}x)  [{rust_ws_batch_mode}]")
-print(f"Rust BPE batch:     {rust_bpe_batch_time:.3f}s  ({python_time/rust_bpe_batch_time:.1f}x)  [{rust_bpe_batch_mode}]")
+print(f"Python whitespace:  {python_ws_time:.3f}s")
+print(f"Rust whitespace:    {rust_ws_time:.3f}s  ({python_ws_time/rust_ws_time:.1f}x vs Python whitespace)")
+print(f"Rust ws batch:      {rust_ws_batch_time:.3f}s  ({python_ws_time/rust_ws_batch_time:.1f}x vs Python whitespace)  [{rust_ws_batch_mode}]")
+print()
+print(f"Rust BPE encode:    {rust_bpe_time:.3f}s")
+print(f"Rust BPE batch:     {rust_bpe_batch_time:.3f}s  ({rust_bpe_time/rust_bpe_batch_time:.2f}x vs Rust BPE single)  [{rust_bpe_batch_mode}]")
+print()
+print("Benchmark note:")
+print("- Python baseline here is whitespace splitting only.")
+print("- Rust BPE numbers are not directly comparable to Python whitespace timing.")
+print("- For apples-to-apples BPE comparison, use an equivalent Python BPE tokenizer implementation.")
