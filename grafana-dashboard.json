@@ -23,7 +23,7 @@
     {
       "id": 1,
       "type": "stat",
-      "title": "Total Requests (since restart)",
+      "title": "Accepted Requests (since restart)",
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "refId": "A", "expr": "sum(batch_size_sum)" }],
@@ -46,10 +46,10 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Total Batches (since restart)",
+      "title": "Rejected Requests (since restart)",
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "refId": "A", "expr": "sum(batch_size_count)" }],
+      "targets": [{ "refId": "A", "expr": "sum(rejected_requests_total) + sum(circuit_breaker_trips_total)" }],
       "fieldConfig": {
         "defaults": {
           "decimals": 0,
@@ -67,10 +67,10 @@
     {
       "id": 3,
       "type": "stat",
-      "title": "Rejected (Token Limit)",
+      "title": "Input Total (accepted + rejected)",
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "refId": "A", "expr": "sum(rejected_requests_total)" }],
+      "targets": [{ "refId": "A", "expr": "sum(batch_size_sum) + sum(rejected_requests_total) + sum(circuit_breaker_trips_total)" }],
       "fieldConfig": {
         "defaults": {
           "decimals": 0,
@@ -160,7 +160,7 @@
         },
         {
           "refId": "C",
-          "expr": "sum(rate(batch_size_sum[$__rate_interval]))",
+          "expr": "sum(rate(batch_size_sum[$__rate_interval])) or vector(0)",
           "legendFormat": "req/s"
         }
       ],
@@ -172,19 +172,29 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "Token Rejections + Circuit Trips (per second)",
+      "title": "Outcome Rates (per second)",
       "gridPos": { "h": 7, "w": 8, "x": 0, "y": 12 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(rejected_requests_total[$__rate_interval]))",
+          "expr": "sum(rate(rejected_requests_total[$__rate_interval])) or vector(0)",
           "legendFormat": "token rejected/s"
         },
         {
           "refId": "B",
-          "expr": "sum(rate(circuit_breaker_trips_total[$__rate_interval]))",
+          "expr": "sum(rate(circuit_breaker_trips_total[$__rate_interval])) or vector(0)",
           "legendFormat": "cb trip/s"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(infer_success_total[$__rate_interval])) or vector(0)",
+          "legendFormat": "success/s"
+        },
+        {
+          "refId": "D",
+          "expr": "sum(rate(infer_errors_total[$__rate_interval])) or vector(0)",
+          "legendFormat": "infer error/s"
         }
       ],
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
@@ -219,7 +229,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(vram_poll_errors_total[$__rate_interval]))",
+          "expr": "sum(rate(vram_poll_errors_total[$__rate_interval])) or vector(0)",
           "legendFormat": "errors/s"
         }
       ],

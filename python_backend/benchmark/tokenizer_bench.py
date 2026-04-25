@@ -1,11 +1,21 @@
 import time
 import ctypes
+from pathlib import Path
 
-lib = ctypes.CDLL("../../rust_ops/target/release/librust_ops.so")
+LIB_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "rust_ops"
+    / "target"
+    / "release"
+    / "librust_ops.so"
+)
+lib = ctypes.CDLL(str(LIB_PATH))
 try:
     import rust_ops as rust_ops_py
 except ImportError:
     rust_ops_py = None
+
+print(f"Loaded Rust library: {LIB_PATH}")
 
 # 原有接口
 lib.tokenize_len.restype = ctypes.c_int
@@ -26,6 +36,12 @@ bpe_encode_len_batch = getattr(lib, "bpe_encode_len_batch", None)
 if bpe_encode_len_batch is not None:
     bpe_encode_len_batch.restype = ctypes.c_longlong
     bpe_encode_len_batch.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t]
+
+print(
+    "CTypes batch symbols:",
+    f"tokenize_len_batch={'yes' if tokenize_len_batch is not None else 'no'}",
+    f"bpe_encode_len_batch={'yes' if bpe_encode_len_batch is not None else 'no'}",
+)
 
 TRAIN_TEXT = "hello world foo bar " * 500  # 缩小语料
 lib.bpe_train(TRAIN_TEXT.encode(), 50)     # vocab_size 改成 50
@@ -57,8 +73,14 @@ if tokenize_len_batch is not None:
     start = time.perf_counter()
     tokenize_len_batch(encoded_array, len(encoded_texts))
     rust_ws_batch_time = time.perf_counter() - start
+    rust_ws_batch_mode = "ffi batch"
 else:
-    rust_ws_batch_time = None
+    # Fallback keeps benchmark comparable even if batch symbol is unavailable.
+    start = time.perf_counter()
+    for t in encoded_texts:
+        lib.tokenize_len(t)
+    rust_ws_batch_time = time.perf_counter() - start
+    rust_ws_batch_mode = "fallback loop"
 
 # Rust BPE
 start = time.perf_counter()
@@ -71,8 +93,14 @@ if bpe_encode_len_batch is not None:
     start = time.perf_counter()
     bpe_encode_len_batch(encoded_array, len(encoded_texts))
     rust_bpe_batch_time = time.perf_counter() - start
+    rust_bpe_batch_mode = "ffi batch"
 else:
-    rust_bpe_batch_time = None
+    # Fallback keeps benchmark comparable even if batch symbol is unavailable.
+    start = time.perf_counter()
+    for t in encoded_texts:
+        lib.bpe_encode_len(t)
+    rust_bpe_batch_time = time.perf_counter() - start
+    rust_bpe_batch_mode = "fallback loop"
 
 pyo3_ws_time = None
 pyo3_ws_batch_time = None
@@ -101,15 +129,8 @@ if rust_ops_py is not None:
 print(f"Python whitespace:  {python_time:.3f}s")
 print(f"Rust whitespace:    {rust_ws_time:.3f}s  ({python_time/rust_ws_time:.1f}x)")
 print(f"Rust BPE encode:    {rust_bpe_time:.3f}s  ({python_time/rust_bpe_time:.1f}x)")
-if rust_ws_batch_time is not None:
-    print(f"Rust ws batch:      {rust_ws_batch_time:.3f}s  ({python_time/rust_ws_batch_time:.1f}x)")
-else:
-    print("Rust ws batch:      N/A (symbol not exported)")
-
-if rust_bpe_batch_time is not None:
-    print(f"Rust BPE batch:     {rust_bpe_batch_time:.3f}s  ({python_time/rust_bpe_batch_time:.1f}x)")
-else:
-    print("Rust BPE batch:     N/A (symbol not exported)")
+print(f"Rust ws batch:      {rust_ws_batch_time:.3f}s  ({python_time/rust_ws_batch_time:.1f}x)  [{rust_ws_batch_mode}]")
+print(f"Rust BPE batch:     {rust_bpe_batch_time:.3f}s  ({python_time/rust_bpe_batch_time:.1f}x)  [{rust_bpe_batch_mode}]")
 
 if pyo3_ws_time is not None:
     print(f"PyO3 whitespace:    {pyo3_ws_time:.3f}s  ({python_time/pyo3_ws_time:.1f}x)")

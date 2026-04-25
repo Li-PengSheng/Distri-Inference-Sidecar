@@ -172,6 +172,7 @@ func (b *Batcher) flushBatch(batch []*Request) {
 	if err != nil {
 		slog.Error("backend call failed", "err", err, "batch_size", len(batch))
 		for _, req := range batch {
+			b.metrics.InferErrors.Inc()
 			req.ResultCh <- Result{Err: err}
 		}
 		return
@@ -182,6 +183,7 @@ func (b *Batcher) flushBatch(batch []*Request) {
 	if err := json.NewDecoder(resp.Body).Decode(&batchResp); err != nil {
 		slog.Error("failed to decode backend response", "err", err)
 		for _, req := range batch {
+			b.metrics.InferErrors.Inc()
 			req.ResultCh <- Result{Err: err}
 		}
 		return
@@ -195,8 +197,10 @@ func (b *Batcher) flushBatch(batch []*Request) {
 			continue
 		}
 		if res.Error != "" {
+			b.metrics.InferErrors.Inc()
 			req.ResultCh <- Result{Err: fmt.Errorf("%s", res.Error)}
 		} else {
+			b.metrics.InferSuccess.Inc()
 			req.ResultCh <- Result{
 				OutputData: []byte(res.OutputData),
 				LatencyMs:  latencyMs,

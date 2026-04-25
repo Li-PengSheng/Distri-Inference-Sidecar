@@ -29,6 +29,10 @@ type Metrics struct {
 	VRAMPollErrors prometheus.Counter
 	// VRAMReaderMode indicates active reader mode (1=active, 0=inactive).
 	VRAMReaderMode *prometheus.GaugeVec
+	// InferSuccess counts per-request successful inference fan-out results.
+	InferSuccess prometheus.Counter
+	// InferErrors counts per-request inference failures (backend/batch/fan-out).
+	InferErrors prometheus.Counter
 }
 
 // New registers all Prometheus metrics and starts the /metrics HTTP server on
@@ -71,6 +75,14 @@ func New() *Metrics {
 			Name: "vram_reader_mode",
 			Help: "Active VRAM reader mode (1 active, 0 inactive)",
 		}, []string{"mode"}),
+		InferSuccess: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "infer_success_total",
+			Help: "Total successful inference results returned to callers",
+		}),
+		InferErrors: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "infer_errors_total",
+			Help: "Total inference errors returned to callers",
+		}),
 	}
 
 	prometheus.MustRegister(
@@ -82,6 +94,8 @@ func New() *Metrics {
 		m.VRAMPollDurationMs,
 		m.VRAMPollErrors,
 		m.VRAMReaderMode,
+		m.InferSuccess,
+		m.InferErrors,
 	)
 
 	// Expose /metrics for Prometheus scraping

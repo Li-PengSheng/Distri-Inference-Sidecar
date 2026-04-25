@@ -221,6 +221,8 @@ def test_metrics(expected_reader_mode: str | None = None):
             "vram_poll_duration_ms",
             "vram_poll_errors_total",
             "vram_reader_mode",
+            "infer_success_total",
+            "infer_errors_total",
         ]
         for metric in expected_metrics:
             if metric in text:
@@ -239,28 +241,28 @@ def test_metrics(expected_reader_mode: str | None = None):
 
 
 def test_concurrent_batching(n=8):
-    section(f"Batching efficiency ({n} concurrent requests)")
+    section(f"Batching efficiency via sidecar gRPC ({n} concurrent requests)")
     results = []
     errors = []
     start = time.time()
 
     def send(i):
         prompt = f"Question {i}: What is {i} + {i}?"
-        payload = {
-            "requests": [{
-                "id": f"concurrent-{i}",
-                "input_data": base64.b64encode(prompt.encode()).decode(),
-                "model_name": "qwen2.5:1.5b",
-            }]
-        }
         t0 = time.time()
         try:
-            resp = requests.post(f"{BACKEND_URL}/infer", json=payload, timeout=120)
+            channel = grpc.insecure_channel(GRPC_ADDR)
+            stub = inference_pb2_grpc.InferenceServiceStub(channel)
+            rpc_resp = stub.Infer(
+                inference_pb2.InferRequest(
+                    request_id=f"concurrent-{i}",
+                    input_data=prompt.encode(),
+                    model_name="qwen2.5:1.5b",
+                ),
+                timeout=120,
+            )
+            channel.close()
             elapsed = int((time.time() - t0) * 1000)
-            if resp.status_code == 200:
-                r = resp.json()["results"][0]
-                return {"id": i, "latency": elapsed, "error": r.get("error", "")}
-            return {"id": i, "latency": elapsed, "error": f"HTTP {resp.status_code}"}
+            return {"id": i, "latency": elapsed, "error": rpc_resp.error}
         except Exception as e:
             return {"id": i, "latency": 0, "error": str(e)}
 
