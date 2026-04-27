@@ -33,6 +33,8 @@ type Metrics struct {
 	InferSuccess prometheus.Counter
 	// InferErrors counts per-request inference failures (backend/batch/fan-out).
 	InferErrors prometheus.Counter
+	// QueueRejects counts requests rejected because the batch queue is full.
+	QueueRejects prometheus.Counter
 }
 
 // New registers all Prometheus metrics and starts the /metrics HTTP server on
@@ -83,6 +85,10 @@ func New() *Metrics {
 			Name: "infer_errors_total",
 			Help: "Total inference errors returned to callers",
 		}),
+		QueueRejects: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "queue_rejects_total",
+			Help: "Requests rejected because the batch queue is full",
+		}),
 	}
 
 	prometheus.MustRegister(
@@ -96,6 +102,7 @@ func New() *Metrics {
 		m.VRAMReaderMode,
 		m.InferSuccess,
 		m.InferErrors,
+		m.QueueRejects,
 	)
 
 	// Expose /metrics for Prometheus scraping

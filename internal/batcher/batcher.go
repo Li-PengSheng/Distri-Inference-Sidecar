@@ -11,8 +11,10 @@ package batcher
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync/atomic"
@@ -34,6 +36,8 @@ type Config struct {
 	// BackendURL is the HTTP endpoint that receives batched inference requests,
 	// e.g. "http://localhost:8000/infer".
 	BackendURL string
+	// BackendTimeoutMs is the timeout for each backend batch HTTP call.
+	BackendTimeoutMs int
 }
 
 // Request represents a single inference request submitted by a gRPC caller.
@@ -68,6 +72,7 @@ type Batcher struct {
 	queue      chan *Request
 	vg         *vramguard.Guard
 	metrics    *metrics.Metrics
+	httpClient *http.Client
 	reqCount   atomic.Int64 // requests in last second
 	currentQPS atomic.Int64 // updated every second
 }
@@ -87,11 +92,19 @@ type batchResponse struct {
 // New creates and returns a Batcher wired to the given VRAM guard and metrics
 // collector. The internal request queue has a capacity of 1 000 entries.
 func New(cfg Config, vg *vramguard.Guard, m *metrics.Metrics) *Batcher {
+	timeoutMs := cfg.BackendTimeoutMs
+	if timeoutMs <= 0 {
+		timeoutMs = 30000
+	}
+
 	return &Batcher{
-		cfg:     cfg,
-		queue:   make(chan *Request, 1000),
-		vg:      vg,
+		cfg:   cfg,
+		queue: make(chan *Request, 1000),
+		vg:    vg,
 		metrics: m,
+		httpClient: &http.Client{
+			Timeout: time.Duration(timeoutMs) * time.Millisecond,
+		},
 	}
 }
 
@@ -101,9 +114,15 @@ func (b *Batcher) Submit(req *Request) error {
 		b.metrics.CircuitBreakerTrips.Inc()
 		return fmt.Errorf("vram guard: circuit open, try again later")
 	}
-	b.queue <- req
-	b.reqCount.Add(1)
-	return nil
+
+	select {
+	case b.queue <- req:
+		b.reqCount.Add(1)
+		return nil
+	default:
+		b.metrics.QueueRejects.Inc()
+		return fmt.Errorf("batch queue full, try again later")
+	}
 }
 
 // Start runs the batcher's main loop in the calling goroutine. It continuously
@@ -131,10 +150,11 @@ func (b *Batcher) Start() {
 func (b *Batcher) flushBatch(batch []*Request) {
 	start := time.Now()
 
-	// Build a map so we can fan results back by ID
-	reqMap := make(map[string]*Request, len(batch))
+	// Build a map so we can fan results back by ID.
+	// Slice values preserve all requests even if IDs are duplicated.
+	reqMap := make(map[string][]*Request, len(batch))
 	for _, r := range batch {
-		reqMap[r.ID] = r
+		reqMap[r.ID] = append(reqMap[r.ID], r)
 	}
 
 	type singleReq struct {
@@ -162,8 +182,25 @@ func (b *Batcher) flushBatch(batch []*Request) {
 		slog.Debug("tokenized request", "id", req.ID, "tokens", toks)
 	}
 
-	body, _ := json.Marshal(payload)
-	resp, err := http.Post(b.cfg.BackendURL, "application/json", bytes.NewReader(body))
+	body, err := json.Marshal(payload)
+	if err != nil {
+		slog.Error("failed to encode backend payload", "err", err)
+		b.failBatch(batch, err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), b.httpClient.Timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.cfg.BackendURL, bytes.NewReader(body))
+	if err != nil {
+		slog.Error("failed to build backend request", "err", err)
+		b.failBatch(batch, err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := b.httpClient.Do(req)
 	latencyMs := time.Since(start).Milliseconds()
 
 	b.metrics.InferLatency.Observe(float64(latencyMs))
@@ -171,31 +208,39 @@ func (b *Batcher) flushBatch(batch []*Request) {
 
 	if err != nil {
 		slog.Error("backend call failed", "err", err, "batch_size", len(batch))
-		for _, req := range batch {
-			b.metrics.InferErrors.Inc()
-			req.ResultCh <- Result{Err: err}
-		}
+		b.failBatch(batch, err)
 		return
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			slog.Error("failed reading non-2xx backend body", "status_code", resp.StatusCode, "err", readErr)
+		}
+		err = fmt.Errorf("backend returned status %d: %s", resp.StatusCode, string(respBody))
+		slog.Error("backend returned non-2xx status", "status_code", resp.StatusCode, "batch_size", len(batch))
+		b.failBatch(batch, err)
+		return
+	}
+
 	var batchResp batchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&batchResp); err != nil {
 		slog.Error("failed to decode backend response", "err", err)
-		for _, req := range batch {
-			b.metrics.InferErrors.Inc()
-			req.ResultCh <- Result{Err: err}
-		}
+		b.failBatch(batch, err)
 		return
 	}
 
 	// Fan each result back to the correct waiting caller by ID
 	for _, res := range batchResp.Results {
-		req, ok := reqMap[res.ID]
-		if !ok {
+		reqs := reqMap[res.ID]
+		if len(reqs) == 0 {
 			slog.Warn("got result for unknown request id", "id", res.ID)
 			continue
 		}
+		req := reqs[0]
+		reqMap[res.ID] = reqs[1:]
+
 		if res.Error != "" {
 			b.metrics.InferErrors.Inc()
 			req.ResultCh <- Result{Err: fmt.Errorf("%s", res.Error)}
@@ -208,7 +253,22 @@ func (b *Batcher) flushBatch(batch []*Request) {
 		}
 	}
 
+	// Ensure every queued request gets exactly one terminal result.
+	for id, reqs := range reqMap {
+		for _, req := range reqs {
+			b.metrics.InferErrors.Inc()
+			req.ResultCh <- Result{Err: fmt.Errorf("missing backend result for request id %s", id)}
+		}
+	}
+
 	slog.Debug("batch flushed", "size", len(batch), "latency_ms", latencyMs)
+}
+
+func (b *Batcher) failBatch(batch []*Request, err error) {
+	for _, req := range batch {
+		b.metrics.InferErrors.Inc()
+		req.ResultCh <- Result{Err: err}
+	}
 }
 
 // collectBatch waits up to MaxWaitMs OR until MaxBatchSize is reached.
