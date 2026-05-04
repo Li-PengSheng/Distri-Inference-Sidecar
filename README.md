@@ -29,6 +29,7 @@ A lightweight production-style **gRPC inference sidecar** that provides:
 ---
 
 ## Architecture
+![](docs/sidecar-architecture.png)
 
 ```text
 gRPC client (:50051)
