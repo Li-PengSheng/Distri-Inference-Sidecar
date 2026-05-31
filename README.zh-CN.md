@@ -182,11 +182,17 @@ uv run test.py --concurrent 100 --rounds 5 --expected-reader-mode nvidia-smi
 - SMI：![](docs/smi_v2.png)
 - NVML：![](docs/nvml_v2.png)
 
-结论：
+实测数据（100 并发，5 轮，同负载）：
+
+| 指标 | NVML 模式 | nvidia-smi 模式 |
+|------|-----------|-----------------|
+| 显存采样 p95 | < 1 ms（峰值 ~0.7 ms） | 30–90 ms |
+| 接受请求数 | 501 | 501 |
+| 拒绝请求数 | 1 | 1 |
+| 显存占用 | ~2.47 GB | ~2.31 GB |
 
 - reader mode 切换正确（`nvml=1` 或 `nvidia-smi=1`）
-- 显存采样 p95 从几十毫秒（SMI）降到亚毫秒（NVML）
-- 同负载下请求结果未见明显回归
+- NVML 模式将采样 p95 抖动压制 **> 97%**，同负载下请求结果无回归
 
 ### 3）Python vs Rust tokenizer 基准
 
