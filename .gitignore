@@ -110,3 +110,5 @@ secrets/
 *.temp
 logs/
 tmp/
+
+project-analysis.md

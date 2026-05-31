@@ -183,13 +183,18 @@ Screenshots:
 - SMI mode: ![](docs/smi_v2.png)
 - NVML mode: ![](docs/nvml_v2.png)
 
-Observed outcome:
+Observed outcome (100 concurrent, 5 rounds, same load):
 
-- reader mode switches correctly (`nvml=1` vs `nvidia-smi=1`)
-- VRAM poll p95 drops from tens of ms (SMI) to sub-ms (NVML)
-- no obvious request-outcome regression under the same load
+| Metric | NVML mode | nvidia-smi mode |
+|--------|-----------|-----------------|
+| VRAM poll p95 | < 1 ms (peak ~0.7 ms) | 30–90 ms |
+| Accepted requests | 501 | 501 |
+| Rejected requests | 1 | 1 |
+| VRAM used | ~2.47 GB | ~2.31 GB |
 
-### 3) Python vs Rust tokenizer benchmark
+- Reader mode switches correctly (`nvml=1` vs `nvidia-smi=1`)
+- NVML reduces poll p95 jitter by **> 97%** under identical load
+- No request-outcome regression between modes
 
 ```bash
 cd python_backend/benchmark

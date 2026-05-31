@@ -1,42 +1,42 @@
 services:
-  backend:
-    build: ./python_backend
-    ports:
-      - "8000:8000"
-    environment:
-      BACKEND_PORT: "8000"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-  sidecar:
-    build: .
-    ports:
-      - "50051:50051"
-      - "9091:9090"
-    depends_on:
-      - backend
-    environment:
-      BACKEND_URL: "http://backend:8000/infer"
-      VRAM_READER_MODE: "${VRAM_READER_MODE:-auto}"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    backend:
+        build: ./python_backend
+        ports:
+            - "8000:8000"
+        environment:
+            BACKEND_PORT: "8000"
+        extra_hosts:
+            - "host.docker.internal:host-gateway"
+    sidecar:
+        build: .
+        ports:
+            - "50051:50051"
+            - "9091:9090"
+        depends_on:
+            - backend
+        environment:
+            BACKEND_URL: "http://backend:8000/infer"
+            VRAM_READER_MODE: "${VRAM_READER_MODE:-auto}"
+        deploy:
+            resources:
+                reservations:
+                    devices:
+                        - driver: nvidia
+                          count: 1
+                          capabilities: [gpu]
 
-  prometheus:
-    image: prom/prometheus:latest
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    ports:
-      - "9090:9090"
-    depends_on:
-      - sidecar
+    prometheus:
+        image: prom/prometheus:latest
+        volumes:
+            - ./prometheus.yml:/etc/prometheus/prometheus.yml
+        ports:
+            - "9090:9090"
+        depends_on:
+            - sidecar
 
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    depends_on:
-      - prometheus
+    grafana:
+        image: grafana/grafana:latest
+        ports:
+            - "3000:3000"
+        depends_on:
+            - prometheus
