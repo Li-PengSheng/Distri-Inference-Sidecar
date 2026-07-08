@@ -17,6 +17,9 @@ services:
         environment:
             BACKEND_URL: "http://backend:8000/infer"
             VRAM_READER_MODE: "${VRAM_READER_MODE:-auto}"
+            MAX_BATCH_SIZE: "${MAX_BATCH_SIZE:-8}"
+            MAX_WAIT_MS: "${MAX_WAIT_MS:-50}"
+            BACKEND_TIMEOUT_MS: "${BACKEND_TIMEOUT_MS:-120000}"
         deploy:
             resources:
                 reservations:

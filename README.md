@@ -111,13 +111,16 @@ Environment variables:
 |---|---|---|
 | `BACKEND_URL` | required | backend `/infer` endpoint |
 | `VRAM_READER_MODE` | `auto` | **NVML-first** in `auto`; falls back to `nvidia-smi` only when NVML is unavailable. Can force `nvml` or `smi` |
+| `MAX_BATCH_SIZE` | `8` | max requests per micro-batch before immediate flush |
+| `MAX_WAIT_MS` | `50` | max wait window (ms) to collect a partial batch |
+| `BACKEND_TIMEOUT_MS` | `120000` | HTTP timeout (ms) for each backend batch call |
 
 Current sidecar runtime defaults (wired in `cmd/sidecar/main.go`):
 
 - `PollIntervalMs = 500`
 - `OOMThresholdPct = 90`
-- `MaxBatchSize = 8`
-- `MaxWaitMs = 50`
+- `MaxBatchSize = 8` (overridable via `MAX_BATCH_SIZE`)
+- `MaxWaitMs = 50` (overridable via `MAX_WAIT_MS`)
 
 ---
 
@@ -195,6 +198,36 @@ Observed outcome (100 concurrent, 5 rounds, same load):
 - Reader mode switches correctly (`nvml=1` vs `nvidia-smi=1`)
 - NVML reduces poll p95 jitter by **> 97%** under identical load
 - No request-outcome regression between modes
+
+### 3) Batching throughput benchmark (no batching vs batching)
+
+Run with Docker Compose and `python_backend/benchmark/batching_bench.py`:
+
+```bash
+# no batching
+MAX_BATCH_SIZE=1 MAX_WAIT_MS=0 VRAM_READER_MODE=nvml \
+  docker compose -p distribute up -d --build --force-recreate sidecar
+cd python_backend
+uv run benchmark/batching_bench.py --concurrent 100 --rounds 5 --json
+
+# batching (default)
+MAX_BATCH_SIZE=8 MAX_WAIT_MS=50 VRAM_READER_MODE=nvml \
+  docker compose -p distribute up -d --build --force-recreate sidecar
+uv run benchmark/batching_bench.py --concurrent 100 --rounds 5 --json
+```
+
+Measured on `qwen2.5:1.5b` via Ollama, 100 concurrent, 5 rounds, NVML mode, `BACKEND_TIMEOUT_MS=120000`:
+
+| Scenario | Concurrency | MaxBatch | MaxWait | Avg latency | p95 / TTFT | Throughput (req/s) |
+|---|---:|---:|---:|---:|---:|---:|
+| no batching | 100 | 1 | 0 ms | 47,811 ms | 60,513 ms | 1.65 |
+| batching | 100 | 8 | 50 ms | 59,924 ms | 60,148 ms | 1.66 |
+
+Notes:
+
+- workload is GPU-bound (Ollama serial inference), so end-to-end throughput is similar; batching still cuts sidecar→backend HTTP fan-out (~500 calls → ~65 flushes per run, avg batch size ~7.6)
+- batching stabilizes tail latency (p95 60.1 s vs 60.5 s) at the cost of higher average latency from the wait window
+- under the default 30 s backend timeout at 100 concurrent, no-batching completes 20/100 requests while batching completes 0/100 — raising `BACKEND_TIMEOUT_MS` is required for fair high-concurrency comparison
 
 ```bash
 cd python_backend/benchmark

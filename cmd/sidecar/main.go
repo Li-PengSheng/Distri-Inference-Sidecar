@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -49,9 +50,10 @@ func main() {
 	}()
 
 	b := batcher.New(batcher.Config{
-		MaxBatchSize: 8,  // keep small — Ollama is sequential per request
-		MaxWaitMs:    50, // 50ms window to collect a batch
-		BackendURL:   os.Getenv("BACKEND_URL"),
+		MaxBatchSize:     envInt("MAX_BATCH_SIZE", 8),
+		MaxWaitMs:        envInt("MAX_WAIT_MS", 50),
+		BackendURL:       os.Getenv("BACKEND_URL"),
+		BackendTimeoutMs: envInt("BACKEND_TIMEOUT_MS", 30000),
 	}, vg, m)
 	go b.Start()
 
@@ -71,4 +73,17 @@ func main() {
 	<-quit
 
 	slog.Info("shutting down")
+}
+
+func envInt(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v < 0 {
+		slog.Warn("invalid env int, using fallback", "key", key, "value", raw, "fallback", fallback)
+		return fallback
+	}
+	return v
 }
