@@ -110,10 +110,11 @@ Environment variables:
 | Key | Default | Description |
 |---|---|---|
 | `BACKEND_URL` | required | backend `/infer` endpoint |
-| `VRAM_READER_MODE` | `auto` | **NVML-first** in `auto`; falls back to `nvidia-smi` only when NVML is unavailable. Can force `nvml` or `smi` |
+| `VRAM_READER_MODE` | `auto` | **NVML-first** in `auto`; falls back to `nvidia-smi` only when NVML is unavailable. Can force `nvml`, `smi`, or `nvidia-smi` (alias of `smi`) |
 | `MAX_BATCH_SIZE` | `8` | max requests per micro-batch before immediate flush |
 | `MAX_WAIT_MS` | `50` | max wait window (ms) to collect a partial batch |
 | `BACKEND_TIMEOUT_MS` | `120000` | HTTP timeout (ms) for each backend batch call |
+| `BATCHER_DEBUG_TOKENIZE` | off | optional debug flag; when `true`, logs per-request BPE token counts inside the batcher (not recommended in production) |
 
 Current sidecar runtime defaults (wired in `cmd/sidecar/main.go`):
 
@@ -227,7 +228,7 @@ Notes:
 
 - workload is GPU-bound (Ollama serial inference), so end-to-end throughput is similar; batching still cuts sidecar→backend HTTP fan-out (~500 calls → ~65 flushes per run, avg batch size ~7.6)
 - batching stabilizes tail latency (p95 60.1 s vs 60.5 s) at the cost of higher average latency from the wait window
-- under the default 30 s backend timeout at 100 concurrent, no-batching completes 20/100 requests while batching completes 0/100 — raising `BACKEND_TIMEOUT_MS` is required for fair high-concurrency comparison
+- under a 30 s backend timeout at 100 concurrent, no-batching completes 20/100 requests while batching completes 0/100 — the default is now 120 s (`BACKEND_TIMEOUT_MS=120000`); lower the timeout only when testing timeout behavior
 
 ```bash
 cd python_backend/benchmark

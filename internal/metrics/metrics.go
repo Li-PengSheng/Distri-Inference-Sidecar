@@ -1,10 +1,8 @@
 // Package metrics registers and exposes Prometheus metrics for the sidecar.
-//
-// Calling New registers four metrics with the default Prometheus registry and
-// starts an HTTP server on :9090 that serves the /metrics scrape endpoint.
 package metrics
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -37,10 +35,17 @@ type Metrics struct {
 	QueueRejects prometheus.Counter
 }
 
-// New registers all Prometheus metrics and starts the /metrics HTTP server on
-// :9090 in a background goroutine. It panics if any metric is already
-// registered (double-registration is a programming error).
+// New registers all Prometheus metrics with the default registry.
 func New() *Metrics {
+	return registerMetrics(prometheus.DefaultRegisterer)
+}
+
+// NewForTest registers metrics with a private registry for unit tests.
+func NewForTest() *Metrics {
+	return registerMetrics(prometheus.NewRegistry())
+}
+
+func registerMetrics(reg prometheus.Registerer) *Metrics {
 	m := &Metrics{
 		InferLatency: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "infer_latency_ms",
@@ -91,7 +96,7 @@ func New() *Metrics {
 		}),
 	}
 
-	prometheus.MustRegister(
+	reg.MustRegister(
 		m.InferLatency,
 		m.BatchSize,
 		m.CircuitBreakerTrips,
@@ -105,14 +110,19 @@ func New() *Metrics {
 		m.QueueRejects,
 	)
 
-	// Expose /metrics for Prometheus scraping
+	return m
+}
+
+// StartHTTPServer serves /metrics on addr in a background goroutine.
+func (m *Metrics) StartHTTPServer(addr string) *http.Server {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	srv := &http.Server{Addr: addr, Handler: mux}
 	go func() {
-		slog.Info("metrics server listening", "addr", ":9090")
-		http.Handle("/metrics", promhttp.Handler())
-		if err := http.ListenAndServe(":9090", nil); err != nil {
+		slog.Info("metrics server listening", "addr", addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("metrics server failed", "err", err)
 		}
 	}()
-
-	return m
+	return srv
 }

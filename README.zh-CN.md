@@ -109,10 +109,11 @@ BACKEND_URL=http://localhost:8000/infer ./sidecar
 | 配置 | 默认值 | 说明 |
 |---|---|---|
 | `BACKEND_URL` | 必填 | 后端 `/infer` 地址 |
-| `VRAM_READER_MODE` | `auto` | 默认 `auto` 为 **NVML 优先**；仅在 NVML 不可用时回退 `nvidia-smi`。也可强制 `nvml` 或 `smi` |
+| `VRAM_READER_MODE` | `auto` | 默认 `auto` 为 **NVML 优先**；仅在 NVML 不可用时回退 `nvidia-smi`。也可强制 `nvml`、`smi` 或 `nvidia-smi`（`smi` 的别名） |
 | `MAX_BATCH_SIZE` | `8` | 单批最大请求数，达到后立即 flush |
 | `MAX_WAIT_MS` | `50` | 收集未满批次的最长等待时间（毫秒） |
 | `BACKEND_TIMEOUT_MS` | `120000` | 单次后端 batch HTTP 调用超时（毫秒） |
+| `BATCHER_DEBUG_TOKENIZE` | 关闭 | 可选调试开关；设为 `true` 时，在 batcher 内打印每条请求的 BPE token 数（生产环境不建议开启） |
 
 当前 sidecar 运行默认值（写在 `cmd/sidecar/main.go`）：
 
@@ -225,7 +226,7 @@ uv run benchmark/batching_bench.py --concurrent 100 --rounds 5 --json
 
 - 当前 workload 受 GPU 推理（Ollama 串行）主导，端到端吞吐接近；batching 主要减少 sidecar→backend HTTP 扇出（每轮约 500 次请求 → ~65 次 flush，平均 batch size ~7.6）
 - batching 让尾延迟更稳定（p95 60.1 s vs 60.5 s），平均延迟会因等待窗口略升
-- 在默认 30 s 后端超时、100 并发下，no batching 仅完成 20/100，batching 为 0/100；高并发公平对比需提高 `BACKEND_TIMEOUT_MS`
+- 在 30 s 后端超时、100 并发下，no batching 仅完成 20/100，batching 为 0/100；当前默认已为 120 s（`BACKEND_TIMEOUT_MS=120000`），仅在测试超时行为时才应调低
 
 ### 4）Python vs Rust tokenizer 基准
 
