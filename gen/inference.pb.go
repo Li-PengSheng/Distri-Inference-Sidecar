@@ -7,7 +7,7 @@
 // Package inference defines the gRPC service contract for the
 // Distri-Inference-Sidecar.
 
-package proto
+package gen
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -296,7 +296,7 @@ const file_inference_proto_rawDesc = "" +
 	"\rvram_total_mb\x18\x03 \x01(\x02R\vvramTotalMb2\x92\x01\n" +
 	"\x10InferenceService\x12:\n" +
 	"\x05Infer\x12\x17.inference.InferRequest\x1a\x18.inference.InferResponse\x12B\n" +
-	"\vHealthCheck\x12\x18.inference.HealthRequest\x1a\x19.inference.HealthResponseB8Z6github.com/Li-PengSheng/Distri-Inference-Sidecar/protob\x06proto3"
+	"\vHealthCheck\x12\x18.inference.HealthRequest\x1a\x19.inference.HealthResponseB:Z8github.com/Li-PengSheng/Distri-Inference-Sidecar/gen;genb\x06proto3"
 
 var (
 	file_inference_proto_rawDescOnce sync.Once

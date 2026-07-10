@@ -4,7 +4,7 @@ syntax = "proto3";
 // Distri-Inference-Sidecar.
 package inference;
 
-option go_package = "github.com/Li-PengSheng/Distri-Inference-Sidecar/proto";
+option go_package = "github.com/Li-PengSheng/Distri-Inference-Sidecar/gen;gen";
 
 // InferenceService is the primary service exposed by the sidecar.
 service InferenceService {
