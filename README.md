@@ -119,7 +119,8 @@ Environment variables:
 Current sidecar runtime defaults (wired in `cmd/sidecar/main.go`):
 
 - `PollIntervalMs = 500`
-- `OOMThresholdPct = 90`
+- `OOMThresholdPct = 90` (open circuit at or above this VRAM utilisation)
+- `CloseThresholdPct = 85` (close circuit at or below this; hysteresis deadband is 85–90%)
 - `MaxBatchSize = 8` (overridable via `MAX_BATCH_SIZE`)
 - `MaxWaitMs = 50` (overridable via `MAX_WAIT_MS`)
 
@@ -131,6 +132,8 @@ Defined in `proto/inference.proto`:
 
 - `Infer(InferRequest) returns (InferResponse)`
 - `HealthCheck(HealthRequest) returns (HealthResponse)`
+
+Admission and overload errors are returned as gRPC status codes (`InvalidArgument`, `ResourceExhausted`, `Unavailable`, `Canceled`, `DeadlineExceeded`). The `InferResponse.error` field is reserved for backend execution errors forwarded from the Python backend.
 
 ---
 

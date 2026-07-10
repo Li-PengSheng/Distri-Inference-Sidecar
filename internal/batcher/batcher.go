@@ -13,9 +13,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -53,6 +55,8 @@ type Request struct {
 	InputData []byte
 	// ModelName identifies which model the backend should run.
 	ModelName string
+	// Ctx carries the caller context for cancellation propagation.
+	Ctx context.Context
 	// ResultCh receives exactly one Result when the batch containing this
 	// request has been processed by the backend.
 	ResultCh chan Result
@@ -120,18 +124,18 @@ func New(cfg Config, vg *vramguard.Guard, m *metrics.Metrics) *Batcher {
 func (b *Batcher) Submit(req *Request) error {
 	if b.vg.IsOpen() {
 		b.metrics.CircuitBreakerTrips.Inc()
-		return fmt.Errorf("vram guard: circuit open, try again later")
+		return ErrCircuitOpen
 	}
 
 	select {
 	case <-b.stopCh:
-		return fmt.Errorf("batcher stopped")
+		return ErrBatcherStopped
 	case b.queue <- req:
 		b.reqCount.Add(1)
 		return nil
 	default:
 		b.metrics.QueueRejects.Inc()
-		return fmt.Errorf("batch queue full, try again later")
+		return ErrQueueFull
 	}
 }
 
@@ -218,6 +222,21 @@ func (b *Batcher) failRequest(req *Request, err error) {
 func (b *Batcher) flushBatch(batch []*Request) {
 	start := time.Now()
 
+	active := make([]*Request, 0, len(batch))
+	for _, req := range batch {
+		if req.Ctx != nil {
+			if err := req.Ctx.Err(); err != nil {
+				b.failRequest(req, err)
+				continue
+			}
+		}
+		active = append(active, req)
+	}
+	if len(active) == 0 {
+		return
+	}
+	batch = active
+
 	// Build a map so we can fan results back by ID.
 	// Slice values preserve all requests even if IDs are duplicated.
 	reqMap := make(map[string][]*Request, len(batch))
@@ -254,7 +273,7 @@ func (b *Batcher) flushBatch(batch []*Request) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		slog.Error("failed to encode backend payload", "err", err)
-		b.failBatch(batch, err)
+		b.failBatch(batch, wrapResponseInvalid(err))
 		return
 	}
 
@@ -264,7 +283,7 @@ func (b *Batcher) flushBatch(batch []*Request) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.cfg.BackendURL, bytes.NewReader(body))
 	if err != nil {
 		slog.Error("failed to build backend request", "err", err)
-		b.failBatch(batch, err)
+		b.failBatch(batch, wrapResponseInvalid(err))
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -277,7 +296,7 @@ func (b *Batcher) flushBatch(batch []*Request) {
 
 	if err != nil {
 		slog.Error("backend call failed", "err", err, "batch_size", len(batch))
-		b.failBatch(batch, err)
+		b.failBatch(batch, wrapUnavailable(err))
 		return
 	}
 	defer resp.Body.Close()
@@ -289,14 +308,14 @@ func (b *Batcher) flushBatch(batch []*Request) {
 		}
 		err = fmt.Errorf("backend returned status %d: %s", resp.StatusCode, string(respBody))
 		slog.Error("backend returned non-2xx status", "status_code", resp.StatusCode, "batch_size", len(batch))
-		b.failBatch(batch, err)
+		b.failBatch(batch, wrapUnavailable(err))
 		return
 	}
 
 	var batchResp batchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&batchResp); err != nil {
 		slog.Error("failed to decode backend response", "err", err)
-		b.failBatch(batch, err)
+		b.failBatch(batch, wrapResponseInvalid(err))
 		return
 	}
 
@@ -394,4 +413,28 @@ func (b *Batcher) dynamicWaitMs() time.Duration {
 	default:
 		return time.Duration(b.cfg.MaxWaitMs/4) * time.Millisecond
 	}
+}
+
+func wrapUnavailable(err error) error {
+	if errors.Is(err, ErrBackendUnavailable) {
+		return err
+	}
+	return fmt.Errorf("%w: %v", ErrBackendUnavailable, err)
+}
+
+func wrapResponseInvalid(err error) error {
+	if errors.Is(err, ErrBackendResponseInvalid) {
+		return err
+	}
+	return fmt.Errorf("%w: %v", ErrBackendResponseInvalid, err)
+}
+
+func isBackendUnreachable(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, ErrBackendUnavailable)
 }

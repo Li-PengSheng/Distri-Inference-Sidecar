@@ -9,6 +9,7 @@ package grpcserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -18,6 +19,8 @@ import (
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/metrics"
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/tokenizer"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Server is the gRPC service implementation. It embeds the generated
@@ -66,15 +69,10 @@ func (s *Server) GracefulStop() {
 // Infer is called by gRPC clients.
 // It submits the request to the batcher and blocks until result comes back.
 func (s *Server) Infer(ctx context.Context, req *pb.InferRequest) (*pb.InferResponse, error) {
-
 	input := string(req.InputData)
 	if err := tokenizer.Validate(input); err != nil {
-		// Increment the rejected-requests counter before returning the error.
 		s.metrics.RejectedRequests.Inc()
-		return &pb.InferResponse{
-			RequestId: req.RequestId,
-			Error:     err.Error(),
-		}, nil
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	resultCh := make(chan batcher.Result, 1)
@@ -83,22 +81,21 @@ func (s *Server) Infer(ctx context.Context, req *pb.InferRequest) (*pb.InferResp
 		ID:        req.RequestId,
 		InputData: req.InputData,
 		ModelName: req.ModelName,
+		Ctx:       ctx,
 		ResultCh:  resultCh,
 	}
 
-	// Submit to batcher — may fail if VRAM circuit is open
 	if err := s.batcher.Submit(bReq); err != nil {
 		slog.Warn("request rejected", "id", req.RequestId, "err", err)
-		return &pb.InferResponse{
-			RequestId: req.RequestId,
-			Error:     err.Error(),
-		}, nil
+		return nil, statusFromSubmitErr(err)
 	}
 
-	// Block until batcher fans the result back
 	select {
 	case result := <-resultCh:
 		if result.Err != nil {
+			if st, ok := statusFromResultErr(result.Err); ok {
+				return nil, st
+			}
 			return &pb.InferResponse{
 				RequestId: req.RequestId,
 				Error:     result.Err.Error(),
@@ -111,13 +108,45 @@ func (s *Server) Infer(ctx context.Context, req *pb.InferRequest) (*pb.InferResp
 		}, nil
 
 	case <-ctx.Done():
-		// Client cancelled or timed out
 		slog.Warn("request context cancelled", "id", req.RequestId)
-		return &pb.InferResponse{
-			RequestId: req.RequestId,
-			Error:     "request cancelled by client",
-		}, nil
+		return nil, statusFromContextErr(ctx.Err())
 	}
+}
+
+func statusFromSubmitErr(err error) error {
+	switch {
+	case errors.Is(err, batcher.ErrCircuitOpen), errors.Is(err, batcher.ErrQueueFull):
+		return status.Error(codes.ResourceExhausted, err.Error())
+	case errors.Is(err, batcher.ErrBatcherStopped):
+		return status.Error(codes.Unavailable, err.Error())
+	default:
+		return status.Error(codes.Internal, err.Error())
+	}
+}
+
+func statusFromResultErr(err error) (error, bool) {
+	switch {
+	case errors.Is(err, batcher.ErrBackendUnavailable):
+		return status.Error(codes.Unavailable, err.Error()), true
+	case errors.Is(err, batcher.ErrBackendResponseInvalid):
+		return status.Error(codes.Internal, err.Error()), true
+	case errors.Is(err, context.Canceled):
+		return status.Error(codes.Canceled, err.Error()), true
+	case errors.Is(err, context.DeadlineExceeded):
+		return status.Error(codes.DeadlineExceeded, err.Error()), true
+	default:
+		return nil, false
+	}
+}
+
+func statusFromContextErr(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return status.Error(codes.Canceled, "request cancelled by client")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return status.Error(codes.DeadlineExceeded, "request deadline exceeded")
+	}
+	return status.Error(codes.Canceled, err.Error())
 }
 
 // HealthCheck returns the current VRAM utilisation and whether the
