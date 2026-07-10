@@ -66,6 +66,7 @@ func main() {
 		PollIntervalMs:    cfg.pollIntervalMs,
 		OOMThresholdPct:   cfg.oomThresholdPct,
 		CloseThresholdPct: cfg.closeThresholdPct,
+		ReaderMode:        cfg.vramReaderMode,
 	}, m)
 	go vg.Start()
 
