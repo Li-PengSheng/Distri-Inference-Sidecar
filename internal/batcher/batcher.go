@@ -17,11 +17,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/metrics"
-	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/tokenizer"
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/vramguard"
 )
 
@@ -38,6 +38,10 @@ type Config struct {
 	BackendURL string
 	// BackendTimeoutMs is the timeout for each backend batch HTTP call.
 	BackendTimeoutMs int
+	// DebugTokenize enables per-request token counting in flushBatch logs.
+	DebugTokenize bool
+	// DebugCountTokens counts tokens when DebugTokenize is enabled.
+	DebugCountTokens func(string) int
 }
 
 // Request represents a single inference request submitted by a gRPC caller.
@@ -75,6 +79,9 @@ type Batcher struct {
 	httpClient *http.Client
 	reqCount   atomic.Int64 // requests in last second
 	currentQPS atomic.Int64 // updated every second
+	stopCh     chan struct{}
+	stopOnce   sync.Once
+	wg         sync.WaitGroup
 }
 
 // singleResult holds the backend's response for one request within a batch.
@@ -94,7 +101,7 @@ type batchResponse struct {
 func New(cfg Config, vg *vramguard.Guard, m *metrics.Metrics) *Batcher {
 	timeoutMs := cfg.BackendTimeoutMs
 	if timeoutMs <= 0 {
-		timeoutMs = 30000
+		timeoutMs = 120000
 	}
 
 	return &Batcher{
@@ -105,6 +112,7 @@ func New(cfg Config, vg *vramguard.Guard, m *metrics.Metrics) *Batcher {
 		httpClient: &http.Client{
 			Timeout: time.Duration(timeoutMs) * time.Millisecond,
 		},
+		stopCh: make(chan struct{}),
 	}
 }
 
@@ -116,6 +124,8 @@ func (b *Batcher) Submit(req *Request) error {
 	}
 
 	select {
+	case <-b.stopCh:
+		return fmt.Errorf("batcher stopped")
 	case b.queue <- req:
 		b.reqCount.Add(1)
 		return nil
@@ -126,22 +136,80 @@ func (b *Batcher) Submit(req *Request) error {
 }
 
 // Start runs the batcher's main loop in the calling goroutine. It continuously
-// collects batches and dispatches each one to the backend concurrently. This
-// method never returns; call it via go b.Start().
+// collects batches and dispatches each one to the backend concurrently.
 func (b *Batcher) Start() {
 	slog.Info("batcher started",
 		"max_batch_size", b.cfg.MaxBatchSize,
 		"max_wait_ms", b.cfg.MaxWaitMs,
 	)
-	go b.trackQPS()
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		b.trackQPS()
+	}()
+
 	for {
+		select {
+		case <-b.stopCh:
+			b.drainQueueWithError(fmt.Errorf("batcher stopped"))
+			return
+		default:
+		}
+
 		batch := b.collectBatch()
 		if len(batch) == 0 {
-			continue // no requests collected, try again
+			if b.isStopped() {
+				b.drainQueueWithError(fmt.Errorf("batcher stopped"))
+				return
+			}
+			continue
 		}
+
 		slog.Debug("flushing batch", "size", len(batch))
-		go b.flushBatch(batch)
+		b.wg.Add(1)
+		go func(batch []*Request) {
+			defer b.wg.Done()
+			b.flushBatch(batch)
+		}(batch)
 	}
+}
+
+// Stop ends queue processing and waits for in-flight batch flushes to finish.
+// Pending requests receive a terminal error on ResultCh.
+func (b *Batcher) Stop() {
+	b.stopOnce.Do(func() {
+		close(b.stopCh)
+		close(b.queue)
+	})
+	b.wg.Wait()
+}
+
+func (b *Batcher) isStopped() bool {
+	select {
+	case <-b.stopCh:
+		return true
+	default:
+		return false
+	}
+}
+
+func (b *Batcher) drainQueueWithError(err error) {
+	for {
+		select {
+		case req, ok := <-b.queue:
+			if !ok {
+				return
+			}
+			b.failRequest(req, err)
+		default:
+			return
+		}
+	}
+}
+
+func (b *Batcher) failRequest(req *Request, err error) {
+	b.metrics.InferErrors.Inc()
+	req.ResultCh <- Result{Err: err}
 }
 
 // flushBatch serialises the batch into a JSON payload, posts it to the backend,
@@ -176,10 +244,11 @@ func (b *Batcher) flushBatch(batch []*Request) {
 		})
 	}
 
-	// Tokenize each request for debug logging before forwarding to the backend.
-	for _, req := range batch {
-		toks := tokenizer.CountTokens(string(req.InputData))
-		slog.Debug("tokenized request", "id", req.ID, "tokens", toks)
+	if b.cfg.DebugTokenize && b.cfg.DebugCountTokens != nil {
+		for _, req := range batch {
+			toks := b.cfg.DebugCountTokens(string(req.InputData))
+			slog.Debug("tokenized request", "id", req.ID, "tokens", toks)
+		}
 	}
 
 	body, err := json.Marshal(payload)
@@ -266,8 +335,7 @@ func (b *Batcher) flushBatch(batch []*Request) {
 
 func (b *Batcher) failBatch(batch []*Request, err error) {
 	for _, req := range batch {
-		b.metrics.InferErrors.Inc()
-		req.ResultCh <- Result{Err: err}
+		b.failRequest(req, err)
 	}
 }
 
@@ -278,13 +346,18 @@ func (b *Batcher) collectBatch() []*Request {
 
 	for {
 		select {
-		case req := <-b.queue:
+		case req, ok := <-b.queue:
+			if !ok {
+				return batch
+			}
 			batch = append(batch, req)
 			if len(batch) >= b.cfg.MaxBatchSize {
 				return batch // full batch — flush immediately
 			}
 		case <-deadline:
 			return batch // time up — flush whatever we have
+		case <-b.stopCh:
+			return batch
 		}
 	}
 }
@@ -296,12 +369,17 @@ func (b *Batcher) GetGuard() *vramguard.Guard {
 }
 
 // trackQPS counts requests per second and stores the result in currentQPS.
-// It is launched as a goroutine by Start and runs for the lifetime of the Batcher.
 func (b *Batcher) trackQPS() {
 	ticker := time.NewTicker(time.Second)
-	for range ticker.C {
-		count := b.reqCount.Swap(0)
-		b.currentQPS.Store(count)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-b.stopCh:
+			return
+		case <-ticker.C:
+			count := b.reqCount.Swap(0)
+			b.currentQPS.Store(count)
+		}
 	}
 }
 

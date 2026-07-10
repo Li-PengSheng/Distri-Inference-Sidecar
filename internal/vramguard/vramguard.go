@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,24 +30,27 @@ type Config struct {
 	OOMThresholdPct float64
 }
 
+// Reader reports GPU VRAM usage. It is exported for test injection.
+type Reader interface {
+	ReadUsageMB() (used, total float64, err error)
+	Close()
+	Name() string
+}
+
 // Guard monitors GPU VRAM and exposes a circuit-breaker that opens when usage
 // exceeds the configured threshold. All fields accessed concurrently use
 // atomic operations to avoid data races.
 type Guard struct {
 	cfg         Config
 	circuitOpen atomic.Bool
-	reader      vramReader
+	reader      Reader
 	metrics     *metrics.Metrics
+	stopCh      chan struct{}
+	stopOnce    sync.Once
 	// UsedMB holds the most recent used-VRAM reading (float64) in MiB.
 	UsedMB atomic.Value
 	// TotalMB holds the most recent total-VRAM reading (float64) in MiB.
 	TotalMB atomic.Value
-}
-
-type vramReader interface {
-	ReadUsageMB() (used, total float64, err error)
-	Close()
-	Name() string
 }
 
 type nvmlReader struct {
@@ -58,10 +62,16 @@ type smiReader struct{}
 // New allocates a Guard with the given configuration and initialises the VRAM
 // counters to zero. Call Start (typically in a goroutine) to begin polling.
 func New(cfg Config, m *metrics.Metrics) *Guard {
+	return NewWithReader(cfg, m, newVRAMReader())
+}
+
+// NewWithReader creates a Guard that polls through the provided reader.
+func NewWithReader(cfg Config, m *metrics.Metrics, reader Reader) *Guard {
 	g := &Guard{
 		cfg:     cfg,
-		reader:  newVRAMReader(),
+		reader:  reader,
 		metrics: m,
+		stopCh:  make(chan struct{}),
 	}
 	g.UsedMB.Store(float64(0))
 	g.TotalMB.Store(float64(0))
@@ -81,7 +91,6 @@ func (g *Guard) GetUsage() (float64, float64) {
 
 // Start polls VRAM usage through the configured reader (NVML preferred,
 // nvidia-smi fallback) and updates the circuit-breaker state accordingly.
-// It runs indefinitely; call it via go g.Start().
 func (g *Guard) Start() {
 	defer g.reader.Close()
 	mode := g.reader.Name()
@@ -95,47 +104,62 @@ func (g *Guard) Start() {
 	ticker := time.NewTicker(time.Duration(g.cfg.PollIntervalMs) * time.Millisecond)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		pollStart := time.Now()
-		used, total, err := g.reader.ReadUsageMB()
-		if g.metrics != nil {
-			g.metrics.VRAMPollDurationMs.Observe(float64(time.Since(pollStart).Microseconds()) / 1000.0)
-		}
-		if err != nil {
-			slog.Error("vram query failed", "mode", g.reader.Name(), "err", err)
-			if g.metrics != nil {
-				g.metrics.VRAMPollErrors.Inc()
-			}
-			continue
-		}
-		if total <= 0 {
-			continue
-		}
-		g.UsedMB.Store(used)
-		g.TotalMB.Store(total)
-
-		pct := (used / total) * 100.0
-		if pct >= g.cfg.OOMThresholdPct {
-			if !g.circuitOpen.Load() {
-				slog.Warn("VRAM guard OPEN — rejecting new requests",
-					"pct", pct,
-					"used_mb", used,
-					"total_mb", total,
-				)
-				g.circuitOpen.Store(true)
-			}
-		} else {
-			if g.circuitOpen.Load() {
-				slog.Info("VRAM guard CLOSED — accepting requests",
-					"pct", pct,
-				)
-				g.circuitOpen.Store(false)
-			}
+	for {
+		select {
+		case <-g.stopCh:
+			slog.Info("VRAM guard stopped")
+			return
+		case <-ticker.C:
+			g.pollOnce()
 		}
 	}
 }
 
-func newVRAMReader() vramReader {
+// Stop ends the polling loop started by Start.
+func (g *Guard) Stop() {
+	g.stopOnce.Do(func() {
+		close(g.stopCh)
+	})
+}
+
+func (g *Guard) pollOnce() {
+	pollStart := time.Now()
+	used, total, err := g.reader.ReadUsageMB()
+	if g.metrics != nil {
+		g.metrics.VRAMPollDurationMs.Observe(float64(time.Since(pollStart).Microseconds()) / 1000.0)
+	}
+	if err != nil {
+		slog.Error("vram query failed", "mode", g.reader.Name(), "err", err)
+		if g.metrics != nil {
+			g.metrics.VRAMPollErrors.Inc()
+		}
+		return
+	}
+	if total <= 0 {
+		return
+	}
+	g.UsedMB.Store(used)
+	g.TotalMB.Store(total)
+
+	pct := (used / total) * 100.0
+	if pct >= g.cfg.OOMThresholdPct {
+		if !g.circuitOpen.Load() {
+			slog.Warn("VRAM guard OPEN — rejecting new requests",
+				"pct", pct,
+				"used_mb", used,
+				"total_mb", total,
+			)
+			g.circuitOpen.Store(true)
+		}
+	} else if g.circuitOpen.Load() {
+		slog.Info("VRAM guard CLOSED — accepting requests",
+			"pct", pct,
+		)
+		g.circuitOpen.Store(false)
+	}
+}
+
+func newVRAMReader() Reader {
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv("VRAM_READER_MODE")))
 	if mode == "" {
 		mode = "auto"
@@ -220,11 +244,23 @@ func queryVRAMViaSMI() (used, total float64, err error) {
 		// No GPU available — return safe defaults silently
 		return 0, 1024, nil
 	}
-	parts := strings.Split(strings.TrimSpace(string(out)), ", ")
+	return parseSMIOutput(strings.TrimSpace(string(out)))
+}
+
+func parseSMIOutput(output string) (used, total float64, err error) {
+	parts := strings.Split(output, ", ")
 	if len(parts) != 2 {
-		return 0, 1024, nil
+		return 0, 0, fmt.Errorf("unexpected nvidia-smi output: %q", output)
 	}
-	used, _ = strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
-	total, _ = strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	used, err = strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+	if err != nil {
+		slog.Warn("failed to parse nvidia-smi memory.used", "value", parts[0], "err", err)
+		return 0, 0, fmt.Errorf("parse memory.used: %w", err)
+	}
+	total, err = strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	if err != nil {
+		slog.Warn("failed to parse nvidia-smi memory.total", "value", parts[1], "err", err)
+		return 0, 0, fmt.Errorf("parse memory.total: %w", err)
+	}
 	return used, total, nil
 }

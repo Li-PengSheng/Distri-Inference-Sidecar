@@ -28,6 +28,7 @@ type Server struct {
 	addr    string
 	batcher *batcher.Batcher
 	metrics *metrics.Metrics
+	grpcSrv *grpc.Server
 }
 
 // New creates a Server that will listen on addr and delegate inference work to
@@ -37,6 +38,7 @@ func New(addr string, b *batcher.Batcher, m *metrics.Metrics) *Server {
 		addr:    addr,
 		batcher: b,
 		metrics: m,
+		grpcSrv: grpc.NewServer(),
 	}
 }
 
@@ -48,11 +50,17 @@ func (s *Server) Serve() error {
 		return fmt.Errorf("failed to listen on %s: %w", s.addr, err)
 	}
 
-	grpcSrv := grpc.NewServer()
-	pb.RegisterInferenceServiceServer(grpcSrv, s)
+	pb.RegisterInferenceServiceServer(s.grpcSrv, s)
 
 	slog.Info("gRPC server listening", "addr", s.addr)
-	return grpcSrv.Serve(lis)
+	return s.grpcSrv.Serve(lis)
+}
+
+// GracefulStop stops accepting new RPCs and waits for in-flight handlers to finish.
+func (s *Server) GracefulStop() {
+	if s.grpcSrv != nil {
+		s.grpcSrv.GracefulStop()
+	}
 }
 
 // Infer is called by gRPC clients.
