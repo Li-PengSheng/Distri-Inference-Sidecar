@@ -8,7 +8,7 @@ A **gRPC inference sidecar** that batches concurrent requests, enforces token li
 
 ## Architecture
 
-![](docs/sidecar-architecture.png)
+![](assets/architecture/sidecar-architecture.png)
 
 ```text
 gRPC client (:50051)

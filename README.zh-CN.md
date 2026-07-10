@@ -8,7 +8,7 @@
 
 ## 架构
 
-![](docs/sidecar-architecture.png)
+![](assets/architecture/sidecar-architecture.png)
 
 ```text
 gRPC 客户端 (:50051)
