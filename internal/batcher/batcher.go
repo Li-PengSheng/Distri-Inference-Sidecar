@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -427,14 +426,4 @@ func wrapResponseInvalid(err error) error {
 		return err
 	}
 	return fmt.Errorf("%w: %v", ErrBackendResponseInvalid, err)
-}
-
-func isBackendUnreachable(err error) bool {
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
-	}
-	return errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, context.Canceled) ||
-		errors.Is(err, ErrBackendUnavailable)
 }
