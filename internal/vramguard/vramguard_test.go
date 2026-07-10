@@ -20,10 +20,18 @@ func (f *fakeReader) Close() {}
 
 func (f *fakeReader) Name() string { return "fake" }
 
+func testGuardConfig() Config {
+	return Config{
+		PollIntervalMs:    100,
+		OOMThresholdPct:   90,
+		CloseThresholdPct: 85,
+	}
+}
+
 func TestGuard_CircuitOpensAboveThreshold(t *testing.T) {
 	m := metrics.NewForTest()
 	reader := &fakeReader{used: 950, total: 1000}
-	g := NewWithReader(Config{PollIntervalMs: 100, OOMThresholdPct: 90}, m, reader)
+	g := NewWithReader(testGuardConfig(), m, reader)
 
 	g.pollOnce()
 	if !g.IsOpen() {
@@ -31,10 +39,10 @@ func TestGuard_CircuitOpensAboveThreshold(t *testing.T) {
 	}
 }
 
-func TestGuard_CircuitClosesBelowThreshold(t *testing.T) {
+func TestGuard_CircuitClosesBelowCloseThreshold(t *testing.T) {
 	m := metrics.NewForTest()
 	reader := &fakeReader{used: 950, total: 1000}
-	g := NewWithReader(Config{PollIntervalMs: 100, OOMThresholdPct: 90}, m, reader)
+	g := NewWithReader(testGuardConfig(), m, reader)
 	g.pollOnce()
 	if !g.IsOpen() {
 		t.Fatal("expected circuit open after high usage poll")
@@ -43,14 +51,36 @@ func TestGuard_CircuitClosesBelowThreshold(t *testing.T) {
 	reader.used = 800
 	g.pollOnce()
 	if g.IsOpen() {
-		t.Fatal("expected circuit to close when usage drops below threshold")
+		t.Fatal("expected circuit to close when usage drops below close threshold")
+	}
+}
+
+func TestGuard_HysteresisKeepsCircuitOpenInDeadband(t *testing.T) {
+	m := metrics.NewForTest()
+	reader := &fakeReader{used: 950, total: 1000}
+	g := NewWithReader(testGuardConfig(), m, reader)
+	g.pollOnce()
+	if !g.IsOpen() {
+		t.Fatal("expected circuit open after high usage poll")
+	}
+
+	reader.used = 880
+	g.pollOnce()
+	if !g.IsOpen() {
+		t.Fatal("expected circuit to remain open inside hysteresis deadband")
+	}
+
+	reader.used = 840
+	g.pollOnce()
+	if g.IsOpen() {
+		t.Fatal("expected circuit to close after dropping below close threshold")
 	}
 }
 
 func TestGuard_StaysClosedBelowThreshold(t *testing.T) {
 	m := metrics.NewForTest()
 	reader := &fakeReader{used: 500, total: 1000}
-	g := NewWithReader(Config{PollIntervalMs: 100, OOMThresholdPct: 90}, m, reader)
+	g := NewWithReader(testGuardConfig(), m, reader)
 
 	g.pollOnce()
 	if g.IsOpen() {
@@ -61,7 +91,7 @@ func TestGuard_StaysClosedBelowThreshold(t *testing.T) {
 func TestGuard_PollErrorDoesNotChangeCircuit(t *testing.T) {
 	m := metrics.NewForTest()
 	reader := &fakeReader{err: errTestVRAM}
-	g := NewWithReader(Config{PollIntervalMs: 100, OOMThresholdPct: 90}, m, reader)
+	g := NewWithReader(testGuardConfig(), m, reader)
 
 	g.pollOnce()
 	if g.IsOpen() {

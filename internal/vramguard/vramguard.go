@@ -28,6 +28,9 @@ type Config struct {
 	// OOMThresholdPct is the VRAM utilisation percentage at which the
 	// circuit-breaker opens. Must be in the range (0, 100].
 	OOMThresholdPct float64
+	// CloseThresholdPct is the VRAM utilisation percentage at which an open
+	// circuit closes. Must be less than OOMThresholdPct to provide hysteresis.
+	CloseThresholdPct float64
 }
 
 // Reader reports GPU VRAM usage. It is exported for test injection.
@@ -142,6 +145,14 @@ func (g *Guard) pollOnce() {
 	g.TotalMB.Store(total)
 
 	pct := (used / total) * 100.0
+	closeThreshold := g.cfg.CloseThresholdPct
+	if closeThreshold <= 0 {
+		closeThreshold = g.cfg.OOMThresholdPct - 5
+	}
+	if closeThreshold < 0 {
+		closeThreshold = 0
+	}
+
 	if pct >= g.cfg.OOMThresholdPct {
 		if !g.circuitOpen.Load() {
 			slog.Warn("VRAM guard OPEN — rejecting new requests",
@@ -151,7 +162,7 @@ func (g *Guard) pollOnce() {
 			)
 			g.circuitOpen.Store(true)
 		}
-	} else if g.circuitOpen.Load() {
+	} else if pct <= closeThreshold && g.circuitOpen.Load() {
 		slog.Info("VRAM guard CLOSED — accepting requests",
 			"pct", pct,
 		)

@@ -118,7 +118,8 @@ BACKEND_URL=http://localhost:8000/infer ./sidecar
 当前 sidecar 运行默认值（写在 `cmd/sidecar/main.go`）：
 
 - `PollIntervalMs = 500`
-- `OOMThresholdPct = 90`
+- `OOMThresholdPct = 90`（显存利用率达到或超过此值时开熔断）
+- `CloseThresholdPct = 85`（显存利用率降至此值及以下时关熔断；85–90% 为迟滞区间）
 - `MaxBatchSize = 8`（可通过 `MAX_BATCH_SIZE` 覆盖）
 - `MaxWaitMs = 50`（可通过 `MAX_WAIT_MS` 覆盖）
 
@@ -130,6 +131,8 @@ BACKEND_URL=http://localhost:8000/infer ./sidecar
 
 - `Infer(InferRequest) returns (InferResponse)`
 - `HealthCheck(HealthRequest) returns (HealthResponse)`
+
+准入与过载类错误通过 gRPC status 返回（`InvalidArgument`、`ResourceExhausted`、`Unavailable`、`Canceled`、`DeadlineExceeded`）。`InferResponse.error` 仅用于透传 Python backend 的执行层错误。
 
 ---
 

@@ -33,9 +33,10 @@ const (
 	defaultMaxBatchSize     = 8
 	defaultMaxWaitMs        = 50
 	defaultBackendTimeoutMs = 120000
-	defaultPollIntervalMs   = 500
-	defaultOOMThresholdPct  = 90.0
-	shutdownTimeout         = 10 * time.Second
+	defaultPollIntervalMs     = 500
+	defaultOOMThresholdPct    = 90.0
+	defaultCloseThresholdPct  = 85.0
+	shutdownTimeout           = 10 * time.Second
 )
 
 type runtimeConfig struct {
@@ -45,6 +46,7 @@ type runtimeConfig struct {
 	backendTimeoutMs int
 	pollIntervalMs   int
 	oomThresholdPct  float64
+	closeThresholdPct float64
 	vramReaderMode   string
 }
 
@@ -61,8 +63,9 @@ func main() {
 	metricsSrv := m.StartHTTPServer(":9090")
 
 	vg := vramguard.New(vramguard.Config{
-		PollIntervalMs:  cfg.pollIntervalMs,
-		OOMThresholdPct: cfg.oomThresholdPct,
+		PollIntervalMs:    cfg.pollIntervalMs,
+		OOMThresholdPct:   cfg.oomThresholdPct,
+		CloseThresholdPct: cfg.closeThresholdPct,
 	}, m)
 	go vg.Start()
 
@@ -187,6 +190,12 @@ func loadAndValidateConfig() runtimeConfig {
 		os.Exit(1)
 	}
 
+	closeThresholdPct := defaultCloseThresholdPct
+	if closeThresholdPct <= 0 || closeThresholdPct >= oomThresholdPct {
+		slog.Error("CloseThresholdPct must be in (0, OOMThresholdPct)", "value", closeThresholdPct, "oom_threshold", oomThresholdPct)
+		os.Exit(1)
+	}
+
 	vramReaderMode := strings.ToLower(strings.TrimSpace(os.Getenv("VRAM_READER_MODE")))
 	if vramReaderMode == "" {
 		vramReaderMode = "auto"
@@ -203,9 +212,10 @@ func loadAndValidateConfig() runtimeConfig {
 		maxBatchSize:     maxBatchSize,
 		maxWaitMs:        maxWaitMs,
 		backendTimeoutMs: backendTimeoutMs,
-		pollIntervalMs:   pollIntervalMs,
-		oomThresholdPct:  oomThresholdPct,
-		vramReaderMode:   vramReaderMode,
+		pollIntervalMs:    pollIntervalMs,
+		oomThresholdPct:   oomThresholdPct,
+		closeThresholdPct: closeThresholdPct,
+		vramReaderMode:    vramReaderMode,
 	}
 }
 

@@ -184,20 +184,21 @@ def test_token_limit_rejection():
         channel = grpc.insecure_channel(GRPC_ADDR)
         stub = inference_pb2_grpc.InferenceServiceStub(channel)
         long_input = ("hello world " * 300).encode()
-        resp = stub.Infer(
-            inference_pb2.InferRequest(
-                request_id="test-token-limit",
-                input_data=long_input,
-                model_name="qwen2.5:1.5b",
-            ),
-            timeout=10,
-        )
-        if resp.error and "too long" in resp.error:
-            ok("Long input rejected at gRPC layer", resp.error)
-        elif resp.error:
-            ok("Long input rejected", resp.error)
-        else:
+        try:
+            stub.Infer(
+                inference_pb2.InferRequest(
+                    request_id="test-token-limit",
+                    input_data=long_input,
+                    model_name="qwen2.5:1.5b",
+                ),
+                timeout=10,
+            )
             fail("Long input should be rejected", "got successful response instead")
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.INVALID_ARGUMENT and "too long" in e.details():
+                ok("Long input rejected at gRPC layer", e.details())
+            else:
+                fail("Long input rejected at gRPC layer", f"code={e.code()} details={e.details()}")
         channel.close()
     except Exception as e:
         fail("Token limit rejection test", str(e))

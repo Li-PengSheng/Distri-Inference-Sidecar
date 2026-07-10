@@ -1,20 +1,20 @@
 import asyncio
 import os
 import sys
+from contextlib import asynccontextmanager
+
 sys.path.append(os.path.join(os.path.dirname(__file__), "gen"))
 
 from typing import List
 
 import httpx
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 
 
 OLLAMA_URL = "http://host.docker.internal:11434/api/generate"
 MODEL_NAME = "qwen2.5:1.5b"
-
-app = FastAPI(title="Inference Backend", version="0.1.0")
 
 
 class SingleReq(BaseModel):
@@ -42,23 +42,31 @@ async def call_ollama(client: httpx.AsyncClient, req: SingleReq) -> dict:
         )
         resp.raise_for_status()
         output = resp.json().get("response", "")
-        return {"id": req.id, "output_data": output, "error": ""}  # ← string, not bytes
+        return {"id": req.id, "output_data": output, "error": ""}
     except Exception as e:
         return {"id": req.id, "output_data": "", "error": str(e)}
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    client = httpx.AsyncClient(timeout=60.0)
+    app.state.http_client = client
+    try:
+        yield
+    finally:
+        await client.aclose()
+
+
+app = FastAPI(title="Inference Backend", version="0.1.0", lifespan=lifespan)
+
+
 @app.post("/infer")
-async def infer(payload: BatchPayload):
+async def infer(payload: BatchPayload, request: Request):
     # Backend is execution-only: sidecar handles admission and policy checks.
-    ordered_results: list[dict | None] = [None] * len(payload.requests)
-    async with httpx.AsyncClient() as client:
-        tasks = [call_ollama(client, req) for req in payload.requests]
-        results = await asyncio.gather(*tasks)
-
-    for idx, result in enumerate(results):
-        ordered_results[idx] = result
-
-    return {"results": [result for result in ordered_results if result is not None]}
+    client: httpx.AsyncClient = request.app.state.http_client
+    tasks = [call_ollama(client, req) for req in payload.requests]
+    results = await asyncio.gather(*tasks)
+    return {"results": results}
 
 
 @app.get("/health")
@@ -67,6 +75,7 @@ async def health():
         "status": "ok",
         "model": MODEL_NAME,
     }
+
 
 if __name__ == "__main__":
     port = int(os.getenv("BACKEND_PORT", "8000"))

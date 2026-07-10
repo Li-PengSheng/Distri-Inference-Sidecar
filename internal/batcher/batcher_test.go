@@ -1,7 +1,9 @@
 package batcher
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -39,7 +41,7 @@ func startTestBatcher(t *testing.T, cfg Config, handler http.HandlerFunc) *Batch
 
 	m := metrics.NewForTest()
 	vg := vramguard.NewWithReader(
-		vramguard.Config{PollIntervalMs: 1000, OOMThresholdPct: 90},
+		vramguard.Config{PollIntervalMs: 1000, OOMThresholdPct: 90, CloseThresholdPct: 85},
 		m,
 		&testVRAMReader{used: 100, total: 10000},
 	)
@@ -50,12 +52,17 @@ func startTestBatcher(t *testing.T, cfg Config, handler http.HandlerFunc) *Batch
 }
 
 func submitRequest(t *testing.T, b *Batcher, id string) chan Result {
+	return submitRequestWithCtx(t, b, id, context.Background())
+}
+
+func submitRequestWithCtx(t *testing.T, b *Batcher, id string, ctx context.Context) chan Result {
 	t.Helper()
 	ch := make(chan Result, 1)
 	err := b.Submit(&Request{
 		ID:        id,
 		InputData: []byte("hello"),
 		ModelName: "test-model",
+		Ctx:       ctx,
 		ResultCh:  ch,
 	})
 	if err != nil {
@@ -156,7 +163,7 @@ func TestBatcher_TimeoutFlush(t *testing.T) {
 func TestBatcher_QueueFull(t *testing.T) {
 	m := metrics.NewForTest()
 	vg := vramguard.NewWithReader(
-		vramguard.Config{PollIntervalMs: 1000, OOMThresholdPct: 90},
+		vramguard.Config{PollIntervalMs: 1000, OOMThresholdPct: 90, CloseThresholdPct: 85},
 		m,
 		&testVRAMReader{used: 100, total: 10000},
 	)
@@ -181,8 +188,8 @@ func TestBatcher_QueueFull(t *testing.T) {
 		ModelName: "test",
 		ResultCh:  make(chan Result, 1),
 	})
-	if err == nil {
-		t.Fatal("expected queue full error")
+	if !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("expected ErrQueueFull, got %v", err)
 	}
 }
 
@@ -194,6 +201,24 @@ func TestBatcher_BackendError(t *testing.T) {
 	res := waitResult(t, submitRequest(t, b, "err1"))
 	if res.Err == nil {
 		t.Fatal("expected backend error result")
+	}
+	if !errors.Is(res.Err, ErrBackendUnavailable) {
+		t.Fatalf("expected ErrBackendUnavailable, got %v", res.Err)
+	}
+}
+
+func TestBatcher_BackendInvalidJSONReturnsResponseInvalid(t *testing.T) {
+	b := startTestBatcher(t, Config{MaxBatchSize: 1, MaxWaitMs: 0}, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("not-json"))
+	})
+
+	res := waitResult(t, submitRequest(t, b, "bad-json"))
+	if res.Err == nil {
+		t.Fatal("expected backend error result")
+	}
+	if !errors.Is(res.Err, ErrBackendResponseInvalid) {
+		t.Fatalf("expected ErrBackendResponseInvalid, got %v", res.Err)
 	}
 }
 
@@ -218,5 +243,50 @@ func TestBatcher_MismatchedResponseCount(t *testing.T) {
 	resB := waitResult(t, chB)
 	if resB.Err == nil {
 		t.Fatal("expected missing-result error for request b")
+	}
+}
+
+func TestBatcher_SkipsCancelledRequests(t *testing.T) {
+	var batchCount atomic.Int32
+
+	b := startTestBatcher(t, Config{MaxBatchSize: 4, MaxWaitMs: 200}, func(w http.ResponseWriter, r *http.Request) {
+		batchCount.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]string{}})
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	res := waitResult(t, submitRequestWithCtx(t, b, "cancelled", ctx))
+	if !errors.Is(res.Err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", res.Err)
+	}
+	if got := batchCount.Load(); got != 0 {
+		t.Fatalf("expected no backend flush for cancelled request, got %d", got)
+	}
+}
+
+func TestBatcher_SkipsEntireBatchWhenAllCancelled(t *testing.T) {
+	var batchCount atomic.Int32
+
+	b := startTestBatcher(t, Config{MaxBatchSize: 4, MaxWaitMs: 200}, func(w http.ResponseWriter, r *http.Request) {
+		batchCount.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]string{}})
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ch1 := submitRequestWithCtx(t, b, "c1", ctx)
+	ch2 := submitRequestWithCtx(t, b, "c2", ctx)
+
+	for _, ch := range []chan Result{ch1, ch2} {
+		res := waitResult(t, ch)
+		if !errors.Is(res.Err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", res.Err)
+		}
+	}
+	if got := batchCount.Load(); got != 0 {
+		t.Fatalf("expected no backend flush when entire batch cancelled, got %d", got)
 	}
 }

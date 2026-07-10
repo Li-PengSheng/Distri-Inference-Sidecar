@@ -113,10 +113,14 @@ func registerMetrics(reg prometheus.Registerer) *Metrics {
 	return m
 }
 
-// StartHTTPServer serves /metrics on addr in a background goroutine.
+// StartHTTPServer serves /metrics and /health on addr in a background goroutine.
 func (m *Metrics) StartHTTPServer(addr string) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
 	srv := &http.Server{Addr: addr, Handler: mux}
 	go func() {
 		slog.Info("metrics server listening", "addr", addr)

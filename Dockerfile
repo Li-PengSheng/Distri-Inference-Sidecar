@@ -17,6 +17,9 @@ RUN CGO_ENABLED=1 go build -o sidecar ./cmd/sidecar
 
 FROM debian:bookworm-slim
 WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=go-builder /app/sidecar .
 
 COPY --from=rust-builder /app/rust_ops/target/release/librust_ops.so /usr/local/lib/
