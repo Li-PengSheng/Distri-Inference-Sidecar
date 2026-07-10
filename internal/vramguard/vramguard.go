@@ -9,7 +9,6 @@ package vramguard
 import (
 	"fmt"
 	"log/slog"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -31,6 +30,8 @@ type Config struct {
 	// CloseThresholdPct is the VRAM utilisation percentage at which an open
 	// circuit closes. Must be less than OOMThresholdPct to provide hysteresis.
 	CloseThresholdPct float64
+	// ReaderMode selects the VRAM polling backend: auto, nvml, smi, or nvidia-smi.
+	ReaderMode string
 }
 
 // Reader reports GPU VRAM usage. It is exported for test injection.
@@ -65,7 +66,7 @@ type smiReader struct{}
 // New allocates a Guard with the given configuration and initialises the VRAM
 // counters to zero. Call Start (typically in a goroutine) to begin polling.
 func New(cfg Config, m *metrics.Metrics) *Guard {
-	return NewWithReader(cfg, m, newVRAMReader())
+	return NewWithReader(cfg, m, newVRAMReader(cfg.ReaderMode))
 }
 
 // NewWithReader creates a Guard that polls through the provided reader.
@@ -170,8 +171,8 @@ func (g *Guard) pollOnce() {
 	}
 }
 
-func newVRAMReader() Reader {
-	mode := strings.ToLower(strings.TrimSpace(os.Getenv("VRAM_READER_MODE")))
+func newVRAMReader(mode string) Reader {
+	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" {
 		mode = "auto"
 	}
