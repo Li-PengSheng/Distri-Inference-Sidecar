@@ -55,5 +55,8 @@ services:
         image: grafana/grafana:11.4.0
         ports:
             - "3000:3000"
+        volumes:
+            - ./grafana/provisioning:/etc/grafana/provisioning
+            - ./grafana-dashboard.json:/etc/grafana/provisioning/dashboards/json/distri-sidecar.json:ro
         depends_on:
             - prometheus
