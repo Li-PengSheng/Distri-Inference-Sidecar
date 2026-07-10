@@ -32,7 +32,24 @@ cd python_backend
 uv run test.py --concurrent 100 --rounds 5 --expected-reader-mode nvidia-smi
 ```
 
-Screenshots: `docs/nvml_v2.png`, `docs/smi_v2.png`
+Screenshots: [`assets/benchmarks/nvml.png`](../assets/benchmarks/nvml.png), [`assets/benchmarks/smi.png`](../assets/benchmarks/smi.png)
+
+## Batching throughput benchmark
+
+```bash
+# No batching
+MAX_BATCH_SIZE=1 MAX_WAIT_MS=0 VRAM_READER_MODE=nvml \
+  docker compose -p distribute up -d --build --force-recreate sidecar
+cd python_backend
+uv run benchmark/batching_bench.py --concurrent 100 --rounds 5 --json
+
+# Default batching
+MAX_BATCH_SIZE=8 MAX_WAIT_MS=50 VRAM_READER_MODE=nvml \
+  docker compose -p distribute up -d --build --force-recreate sidecar
+uv run benchmark/batching_bench.py --concurrent 100 --rounds 5 --json
+```
+
+See [benchmarks.md](benchmarks.md#batching-throughput-with-vs-without-micro-batching) for latest numbers.
 
 ## Go unit tests
 

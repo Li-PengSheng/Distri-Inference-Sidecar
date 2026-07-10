@@ -43,7 +43,7 @@ Without this step you will see link errors (`librust_ops.so: cannot open shared 
 
 ## Micro-batching vs GPU throughput with Ollama
 
-Benchmarks on `qwen2.5:1.5b` via Ollama (100 concurrent, 5 rounds, NVML mode) show **similar end-to-end throughput** with and without batching (~1.65–1.66 req/s) because Ollama serialises GPU inference. The main win from micro-batching is **fewer sidecar→backend HTTP calls** (~500 requests → ~65 flushes per run, average batch size ~7.6), plus slightly more stable tail latency (p95 60.1 s vs 60.5 s). Do not expect batching alone to multiply GPU token throughput until the runtime supports true parallel or continuous batching.
+Benchmarks on `qwen2.5:1.5b` via Ollama on RTX 4060 (100 concurrent, 5 rounds, NVML mode) show **identical end-to-end throughput** with and without batching (**1.66 req/s**) because Ollama serialises GPU inference. The main win from micro-batching is **fewer sidecar→backend HTTP calls** (500 requests → 66 flushes, average batch size 7.6, ~87% reduction), plus slightly more stable tail latency (p95 60.1 s vs 60.2 s). Do not expect batching alone to multiply GPU token throughput until the runtime supports true parallel or continuous batching.
 
 ## Mixed `model_name` values in one batch
 
