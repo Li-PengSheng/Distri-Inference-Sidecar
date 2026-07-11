@@ -111,4 +111,5 @@ secrets/
 logs/
 tmp/
 
-project-analysis.md
+sidecar-analysis.md
+docs/bugfix-notes.md

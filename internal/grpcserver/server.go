@@ -41,8 +41,27 @@ func New(addr string, b *batcher.Batcher, m *metrics.Metrics) *Server {
 		addr:    addr,
 		batcher: b,
 		metrics: m,
-		grpcSrv: grpc.NewServer(),
+		grpcSrv: grpc.NewServer(grpc.ChainUnaryInterceptor(recoveryInterceptor)),
 	}
+}
+
+// recoveryInterceptor converts handler panics into codes.Internal instead of
+// letting them crash the whole sidecar process (grpc-go does not recover
+// panics itself).
+func recoveryInterceptor(
+	ctx context.Context,
+	req any,
+	info *grpc.UnaryServerInfo,
+	handler grpc.UnaryHandler,
+) (resp any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("panic in gRPC handler", "method", info.FullMethod, "panic", r)
+			resp = nil
+			err = status.Error(codes.Internal, "internal server error")
+		}
+	}()
+	return handler(ctx, req)
 }
 
 // Serve starts the gRPC server and blocks until it terminates. It registers the
@@ -71,6 +90,10 @@ func (s *Server) GracefulStop() {
 func (s *Server) Infer(ctx context.Context, req *pb.InferRequest) (*pb.InferResponse, error) {
 	input := string(req.InputData)
 	if err := tokenizer.Validate(input); err != nil {
+		if errors.Is(err, tokenizer.ErrTokenizerFailure) {
+			slog.Error("tokenizer failure during admission", "id", req.RequestId, "err", err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
 		s.metrics.RejectedRequests.Inc()
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}

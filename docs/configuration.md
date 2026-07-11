@@ -7,19 +7,22 @@
 | `BACKEND_URL` | required | Backend `/infer` endpoint |
 | `VRAM_READER_MODE` | `auto` | NVML-first in `auto`; falls back to `nvidia-smi` when NVML is unavailable. Force `nvml`, `smi`, or `nvidia-smi` (alias of `smi`). On RTX 4060: NVML poll p95 **< 1 ms** vs **~30 ms** for `nvidia-smi` (see [benchmarks](benchmarks.md#nvml-vs-smi-vram-polling-100-concurrent-5-rounds)) |
 | `MAX_BATCH_SIZE` | `8` | Max requests per micro-batch before immediate flush. At 100 concurrent, avg flush size **7.6** (p95 **8.0**) |
-| `MAX_WAIT_MS` | `50` | Max wait window (ms) to collect a partial batch. Adds ~12 s to average latency vs no-batching at GPU-bound loads; throughput unchanged |
-| `BACKEND_TIMEOUT_MS` | `120000` | HTTP timeout (ms) per backend batch call. Required for 100-concurrent Ollama runs; both batching modes complete **500/500** at 120 s |
+| `MAX_WAIT_MS` | `50` | Max wait window (ms) to collect a partial batch. On GPU-bound Ollama loads the dominant latency is inference queue time, not this window |
+| `BACKEND_TIMEOUT_MS` | `120000` | HTTP timeout (ms) per backend batch call. At 100 concurrent on Ollama, p99 often approaches this budget; raise it if you need higher completion rates |
 | `BATCHER_DEBUG_TOKENIZE` | off | When `true`, logs per-request BPE token counts in the batcher (not for production) |
+| `POLL_INTERVAL_MS` | `500` | VRAM guard polling interval (ms) |
+| `OOM_THRESHOLD_PCT` | `90` | VRAM utilisation (%) at which the circuit-breaker opens |
+| `CLOSE_THRESHOLD_PCT` | `85` | VRAM utilisation (%) at which an open circuit closes (hysteresis band between the two) |
+| `TOKENIZER_CORPUS_PATH` | unset | Path to a BPE training corpus file. Unset falls back to a small built-in English corpus (token counts poorly approximate real prompts; a startup warning is logged) |
 
-## Hard-coded sidecar defaults (`cmd/sidecar/main.go`)
+## Python backend environment variables (`python_backend/main.py`)
 
-| Setting | Value |
-|---------|-------|
-| `PollIntervalMs` | 500 |
-| `OOMThresholdPct` | 90 (open circuit) |
-| `CloseThresholdPct` | 85 (close circuit; hysteresis band 85–90%) |
-
-See [limitations.md](limitations.md) for why these are not env-configurable yet.
+| Key | Default | Description |
+|---|---|---|
+| `OLLAMA_URL` | `http://host.docker.internal:11434/api/generate` | Ollama generate endpoint |
+| `DEFAULT_MODEL_NAME` | `qwen2.5:1.5b` | Model used when a request omits `model_name` |
+| `OLLAMA_TIMEOUT_S` | `120` | Per-request Ollama timeout (s); keep ≥ sidecar `BACKEND_TIMEOUT_MS` |
+| `OLLAMA_MAX_CONCURRENCY` | `8` | Max in-flight Ollama requests (semaphore) |
 
 ## gRPC API (`proto/inference.proto`)
 
@@ -59,9 +62,9 @@ See [limitations.md](limitations.md) for why these are not env-configurable yet.
 - Rejected = `rejected_requests_total + circuit_breaker_trips_total + queue_rejects_total`
 - Input Total = Accepted + Rejected
 
-Observed under 100 concurrent × 5 rounds (`qwen2.5:1.5b`, RTX 4060): NVML run **501 accepted / 1 rejected**; default batching yields **66 flushes** (avg batch **7.6**). Screenshots: [`assets/benchmarks/nvml.png`](../assets/benchmarks/nvml.png), [`assets/benchmarks/smi.png`](../assets/benchmarks/smi.png).
+Observed under 100 concurrent × 5 rounds (`qwen2.5:1.5b`, RTX 4060): NVML poll stays sub-ms while SMI spikes to ~30–55 ms; default batching yields **66 flushes** for ~500 admitted requests (avg batch **7.6**). Screenshots: [`assets/benchmarks/nvml.png`](../assets/benchmarks/nvml.png), [`assets/benchmarks/smi.png`](../assets/benchmarks/smi.png). Full tables in [benchmarks.md](benchmarks.md).
 
-Import the dashboard from `grafana-dashboard.json` or use Docker Compose Grafana provisioning (auto-loaded from `grafana/provisioning/`).
+Dashboard is auto-loaded via Docker Compose Grafana provisioning from `grafana/provisioning/dashboards/json/distri-sidecar.json`.
 
 ## Project layout
 

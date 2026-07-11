@@ -26,7 +26,9 @@ var initTokenizerOnce sync.Once
 
 func initTestTokenizer() {
 	initTokenizerOnce.Do(func() {
-		tokenizer.Init(strings.Repeat("hello world foo bar ", 50))
+		if err := tokenizer.Init(strings.Repeat("hello world foo bar ", 50)); err != nil {
+			panic(err)
+		}
 	})
 }
 

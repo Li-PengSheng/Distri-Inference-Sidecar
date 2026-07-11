@@ -58,7 +58,10 @@ func main() {
 
 	slog.Info("starting Distri-Inference-Sidecar")
 
-	tokenizer.Init(strings.Repeat("hello world foo bar the quick brown fox ", 200))
+	if err := tokenizer.Init(loadTokenizerCorpus()); err != nil {
+		slog.Error("tokenizer initialization failed", "err", err)
+		os.Exit(1)
+	}
 	m := metrics.New()
 	metricsSrv := m.StartHTTPServer(":9090")
 
@@ -136,6 +139,32 @@ func main() {
 	slog.Info("shutdown complete")
 }
 
+// loadTokenizerCorpus returns the BPE training corpus. When
+// TOKENIZER_CORPUS_PATH is set the file must be readable and non-empty
+// (startup aborts otherwise); without it a small built-in English corpus is
+// used, whose token counts poorly approximate real prompts — hence the warning.
+func loadTokenizerCorpus() string {
+	path := strings.TrimSpace(os.Getenv("TOKENIZER_CORPUS_PATH"))
+	if path == "" {
+		slog.Warn("TOKENIZER_CORPUS_PATH not set; using built-in toy corpus — " +
+			"token counts will not match real model tokenizers")
+		return strings.Repeat("hello world foo bar the quick brown fox ", 200)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		slog.Error("failed to read tokenizer corpus", "path", path, "err", err)
+		os.Exit(1)
+	}
+	corpus := string(data)
+	if strings.TrimSpace(corpus) == "" {
+		slog.Error("tokenizer corpus file is empty", "path", path)
+		os.Exit(1)
+	}
+	slog.Info("tokenizer corpus loaded", "path", path, "bytes", len(data))
+	return corpus
+}
+
 func parseBoolEnv(key string) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
 	case "1", "true", "yes", "on":
@@ -179,21 +208,21 @@ func loadAndValidateConfig() runtimeConfig {
 		os.Exit(1)
 	}
 
-	pollIntervalMs := defaultPollIntervalMs
+	pollIntervalMs := envIntRequired("POLL_INTERVAL_MS", defaultPollIntervalMs)
 	if pollIntervalMs <= 0 {
-		slog.Error("PollIntervalMs must be > 0", "value", pollIntervalMs)
+		slog.Error("POLL_INTERVAL_MS must be > 0", "value", pollIntervalMs)
 		os.Exit(1)
 	}
 
-	oomThresholdPct := defaultOOMThresholdPct
+	oomThresholdPct := envFloatRequired("OOM_THRESHOLD_PCT", defaultOOMThresholdPct)
 	if oomThresholdPct <= 0 || oomThresholdPct > 100 {
-		slog.Error("OOMThresholdPct must be in (0, 100]", "value", oomThresholdPct)
+		slog.Error("OOM_THRESHOLD_PCT must be in (0, 100]", "value", oomThresholdPct)
 		os.Exit(1)
 	}
 
-	closeThresholdPct := defaultCloseThresholdPct
+	closeThresholdPct := envFloatRequired("CLOSE_THRESHOLD_PCT", defaultCloseThresholdPct)
 	if closeThresholdPct <= 0 || closeThresholdPct >= oomThresholdPct {
-		slog.Error("CloseThresholdPct must be in (0, OOMThresholdPct)", "value", closeThresholdPct, "oom_threshold", oomThresholdPct)
+		slog.Error("CLOSE_THRESHOLD_PCT must be in (0, OOM_THRESHOLD_PCT)", "value", closeThresholdPct, "oom_threshold", oomThresholdPct)
 		os.Exit(1)
 	}
 
@@ -228,6 +257,19 @@ func envIntRequired(key string, fallback int) int {
 	v, err := strconv.Atoi(raw)
 	if err != nil {
 		slog.Error("invalid integer environment variable", "key", key, "value", raw, "err", err)
+		os.Exit(1)
+	}
+	return v
+}
+
+func envFloatRequired(key string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		slog.Error("invalid float environment variable", "key", key, "value", raw, "err", err)
 		os.Exit(1)
 	}
 	return v

@@ -28,7 +28,7 @@ Python backend 为**纯执行层**，不做 token 准入。API 与环境变量�
 
 1. **准入在 sidecar，不在 backend** — 经 `rust_ops` 的 BPE 计数在批处理与后端调用之前执行；拒绝返回 gRPC `InvalidArgument`，模型执行错误留在 `InferResponse.error`。
 
-2. **微批处理减少 HTTP 扇出，而非提升 GPU 并行** — 按数量与短等待窗口聚合。Ollama 串行推理下吞吐几乎不变；主要收益是 sidecar→backend 调用次数下降（benchmark 中约 500 次 → ~65 次 flush）。详见 [benchmarks](docs/benchmarks.md)。
+2. **微批处理减少 HTTP 扇出，而非提升 GPU 并行** — 按数量与短等待窗口聚合。Ollama 串行推理下成功吞吐仍受 GPU 限制；主要收益是 sidecar→backend 调用次数下降（**501 → 66** 次 flush，平均批大小 **7.6**，约 **87%** 减少）。详见 [benchmarks](docs/benchmarks.md)。
 
 3. **NVML 优先 + 迟滞熔断** — NVML 采样 p95 < 1 ms，不可用时回退 `nvidia-smi`；90% 开熔断、85% 关熔断，避免抖动。过载映射为 gRPC `ResourceExhausted`。
 
@@ -70,8 +70,8 @@ LD_LIBRARY_PATH=$PWD/rust_ops/target/release \
 
 | 实验 | 结论摘要 |
 |------|----------|
-| [NVML vs SMI](docs/benchmarks.md#nvml-vs-smi-vram-polling-100-concurrent-5-rounds) | NVML 采样 p95 比 `nvidia-smi` **降低 > 97%**；请求结果无回归 |
-| [有/无 batching](docs/benchmarks.md#batching-throughput-with-vs-without-micro-batching) | 吞吐 ~1.65 vs ~1.66 req/s（GPU 瓶颈）；HTTP flush 减少约 87%；batching 尾延迟略稳 |
+| [NVML vs SMI](docs/benchmarks.md#nvml-vs-smi-vram-polling-100-concurrent-5-rounds) | NVML 采样 **亚毫秒** vs SMI **~30–55 ms**（降低 **> 97%**）；100 并发下两者都会撞上 120 s 超时预算 |
+| [有/无 batching](docs/benchmarks.md#batching-throughput-with-vs-without-micro-batching) | GPU 瓶颈；HTTP flush **501 → 66**（约 87%）；100 并发成功率受 120 s 超时限制 |
 | Token 保护 | 超长输入在 gRPC 层拒绝，不进入 backend |
 
 复现步骤：[docs/testing.md](docs/testing.md) · [docs/benchmarks.md](docs/benchmarks.md)
@@ -80,7 +80,7 @@ LD_LIBRARY_PATH=$PWD/rust_ops/target/release \
 
 ## 已知限制
 
-显存阈值硬编码、取消不入队、Compose 健康检查顺序、`rust_ops` 构建依赖、混合 `model_name` 批处理、Ollama 吞吐说明等，见 **[docs/limitations.md](docs/limitations.md)**。
+取消不提前出队、Compose 健康检查顺序、`rust_ops` 构建依赖、混合 `model_name` 批处理、Ollama 吞吐/超时说明等，见 **[docs/limitations.md](docs/limitations.md)**。
 
 ---
 

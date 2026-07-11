@@ -28,7 +28,7 @@ The Python backend is **execution-only**; it does not perform token admission. S
 
 1. **Admission at the sidecar, not the backend** — BPE token counting runs in Go via `rust_ops` before any batching or backend call. Rejections surface as gRPC `InvalidArgument`; backend errors stay in `InferResponse.error`.
 
-2. **Micro-batching for HTTP fan-out, not GPU parallelism** — Requests are grouped by count and a short wait window. With Ollama’s serial inference, throughput stays flat; the win is fewer sidecar→backend round-trips (~500 → ~65 flushes in our benchmark). Details in [benchmarks](docs/benchmarks.md).
+2. **Micro-batching for HTTP fan-out, not GPU parallelism** — Requests are grouped by count and a short wait window. With Ollama’s serial inference, success throughput stays GPU-bound; the win is fewer sidecar→backend round-trips (**501 → 66 flushes**, avg batch **7.6**, ~**87%** fewer calls). Details in [benchmarks](docs/benchmarks.md).
 
 3. **NVML-first VRAM guard with hysteresis** — Poll via NVML (< 1 ms p95) and fall back to `nvidia-smi`. Circuit opens at 90% VRAM, closes at 85%, avoiding flapping. Overload maps to gRPC `ResourceExhausted`.
 
@@ -70,8 +70,8 @@ Prerequisites: Go 1.25+, Rust 1.85+, Python 3.12+ (`uv`), NVIDIA driver (for VRA
 
 | Experiment | Headline result |
 |------------|-----------------|
-| [NVML vs SMI](docs/benchmarks.md#nvml-vs-smi-vram-polling-100-concurrent-5-rounds) | NVML poll p95 **> 97%** lower than `nvidia-smi`; zero request-outcome regression |
-| [Batching on/off](docs/benchmarks.md#batching-throughput-with-vs-without-micro-batching) | Throughput ~1.65 vs ~1.66 req/s (GPU-bound); HTTP flushes drop ~87%; p95 tail slightly tighter with batching |
+| [NVML vs SMI](docs/benchmarks.md#nvml-vs-smi-vram-polling-100-concurrent-5-rounds) | NVML poll **sub-ms** vs SMI **~30–55 ms** (**> 97%** lower); both hit 120 s timeout walls under 100-concurrent Ollama load |
+| [Batching on/off](docs/benchmarks.md#batching-throughput-with-vs-without-micro-batching) | GPU-bound; HTTP flushes **501 → 66** (~87% fewer); success rate limited by 120 s timeouts at 100 concurrent |
 | Token guard | Oversized prompts rejected at gRPC layer before backend contact |
 
 Full reproduction: [docs/testing.md](docs/testing.md) · [docs/benchmarks.md](docs/benchmarks.md)
@@ -80,7 +80,7 @@ Full reproduction: [docs/testing.md](docs/testing.md) · [docs/benchmarks.md](do
 
 ## Known limitations
 
-Hard-coded VRAM thresholds, cancel/dequeue behaviour, Compose health ordering, `rust_ops` build deps, mixed-model batches, and Ollama throughput caveats are documented in **[docs/limitations.md](docs/limitations.md)**.
+Cancel/dequeue behaviour, Compose health ordering, `rust_ops` build deps, mixed-model batches, and Ollama throughput / timeout caveats are documented in **[docs/limitations.md](docs/limitations.md)**.
 
 ---
 

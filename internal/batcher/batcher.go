@@ -85,6 +85,11 @@ type Batcher struct {
 	stopCh     chan struct{}
 	stopOnce   sync.Once
 	wg         sync.WaitGroup
+	// stopMu guards stopped and makes Stop mutually exclusive with in-flight
+	// Submit enqueues, so the queue never receives requests after shutdown
+	// has begun (the queue channel itself is never closed).
+	stopMu  sync.RWMutex
+	stopped bool
 }
 
 // singleResult holds the backend's response for one request within a batch.
@@ -126,9 +131,13 @@ func (b *Batcher) Submit(req *Request) error {
 		return ErrCircuitOpen
 	}
 
-	select {
-	case <-b.stopCh:
+	b.stopMu.RLock()
+	defer b.stopMu.RUnlock()
+	if b.stopped {
 		return ErrBatcherStopped
+	}
+
+	select {
 	case b.queue <- req:
 		b.reqCount.Add(1)
 		return nil
@@ -179,10 +188,17 @@ func (b *Batcher) Start() {
 
 // Stop ends queue processing and waits for in-flight batch flushes to finish.
 // Pending requests receive a terminal error on ResultCh.
+//
+// The queue channel is intentionally never closed: closing it would race with
+// concurrent Submit calls (send on closed channel panics). Instead, Stop marks
+// the batcher stopped under stopMu — waiting out any in-flight enqueue — and
+// then signals the main loop via stopCh to drain whatever remains.
 func (b *Batcher) Stop() {
 	b.stopOnce.Do(func() {
+		b.stopMu.Lock()
+		b.stopped = true
+		b.stopMu.Unlock()
 		close(b.stopCh)
-		close(b.queue)
 	})
 	b.wg.Wait()
 }
@@ -199,10 +215,7 @@ func (b *Batcher) isStopped() bool {
 func (b *Batcher) drainQueueWithError(err error) {
 	for {
 		select {
-		case req, ok := <-b.queue:
-			if !ok {
-				return
-			}
+		case req := <-b.queue:
 			b.failRequest(req, err)
 		default:
 			return
@@ -364,10 +377,7 @@ func (b *Batcher) collectBatch() []*Request {
 
 	for {
 		select {
-		case req, ok := <-b.queue:
-			if !ok {
-				return batch
-			}
+		case req := <-b.queue:
 			batch = append(batch, req)
 			if len(batch) >= b.cfg.MaxBatchSize {
 				return batch // full batch — flush immediately
@@ -401,17 +411,27 @@ func (b *Batcher) trackQPS() {
 	}
 }
 
+// minCollectWait bounds the batch collection window from below. Without it,
+// MaxWaitMs values below 4 produce a zero wait (integer division), turning the
+// collect loop into a CPU-burning busy loop on an idle queue.
+const minCollectWait = time.Millisecond
+
 // Dynamic wait: high QPS → wait longer to fill bigger batches
 func (b *Batcher) dynamicWaitMs() time.Duration {
 	qps := b.currentQPS.Load()
+	var wait time.Duration
 	switch {
 	case qps > 100:
-		return time.Duration(b.cfg.MaxWaitMs) * time.Millisecond
+		wait = time.Duration(b.cfg.MaxWaitMs) * time.Millisecond
 	case qps > 50:
-		return time.Duration(b.cfg.MaxWaitMs/2) * time.Millisecond
+		wait = time.Duration(b.cfg.MaxWaitMs/2) * time.Millisecond
 	default:
-		return time.Duration(b.cfg.MaxWaitMs/4) * time.Millisecond
+		wait = time.Duration(b.cfg.MaxWaitMs/4) * time.Millisecond
 	}
+	if wait < minCollectWait {
+		return minCollectWait
+	}
+	return wait
 }
 
 func wrapUnavailable(err error) error {

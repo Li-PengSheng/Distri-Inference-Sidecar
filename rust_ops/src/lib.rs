@@ -2,6 +2,7 @@
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::panic::{self, AssertUnwindSafe};
 use std::slice;
 
 // Global BPE tokenizer instance, initialized exactly once via bpe_train.
@@ -10,6 +11,20 @@ use std::sync::OnceLock;
 mod bpe_token;
 use bpe_token::BPETokenizer;
 static TOKENIZER: OnceLock<BPETokenizer> = OnceLock::new();
+
+/// catch_ffi_panic runs `f` and converts any panic into `fallback` instead of
+/// letting it unwind across the FFI boundary. A panic escaping an `extern "C"`
+/// function aborts the whole process (Rust >= 1.81), which would take down the
+/// Go sidecar; with this guard the caller just sees the fallback value.
+fn catch_ffi_panic<T>(fallback: T, f: impl FnOnce() -> T) -> T {
+    match panic::catch_unwind(AssertUnwindSafe(f)) {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("rust_ops: panic caught at FFI boundary");
+            fallback
+        }
+    }
+}
 
 /// free_string releases a C string that was previously allocated by Rust with
 /// `CString::into_raw`. Do not call this on strings allocated outside Rust.
@@ -28,29 +43,44 @@ pub extern "C" fn free_string(s: *mut c_char) {
 /// bpe_encode_len. Subsequent calls are silently ignored.
 #[unsafe(no_mangle)]
 pub extern "C" fn bpe_train(text: *const c_char, vocab_size: usize) {
-    let s = unsafe { CStr::from_ptr(text) }.to_str().unwrap_or("");
-    let mut tok = BPETokenizer::new(vocab_size);
-    tok.train(s, vocab_size);
-    TOKENIZER.set(tok).ok();
+    if text.is_null() {
+        return;
+    }
+    catch_ffi_panic((), || {
+        let s = unsafe { CStr::from_ptr(text) }.to_str().unwrap_or("");
+        let mut tok = BPETokenizer::new(vocab_size);
+        tok.train(s, vocab_size);
+        TOKENIZER.set(tok).ok();
+    });
 }
 
 /// bpe_encode_len returns the number of BPE token IDs produced by encoding
 /// `input`. Returns -1 if the tokenizer has not been initialized.
 #[unsafe(no_mangle)]
 pub extern "C" fn bpe_encode_len(input: *const c_char) -> i32 {
-    let s = unsafe { CStr::from_ptr(input) }.to_str().unwrap_or("");
-    match TOKENIZER.get() {
-        Some(tok) => tok.encode(s).len() as i32,
-        None => -1,
+    if input.is_null() {
+        return -1;
     }
+    catch_ffi_panic(-1, || {
+        let s = unsafe { CStr::from_ptr(input) }.to_str().unwrap_or("");
+        match TOKENIZER.get() {
+            Some(tok) => tok.encode(s).len() as i32,
+            None => -1,
+        }
+    })
 }
 
 /// tokenize_len counts tokens by splitting on whitespace. Kept as a reference
 /// implementation and fallback for comparison against the BPE tokenizer.
 #[unsafe(no_mangle)]
 pub extern "C" fn tokenize_len(input: *const c_char) -> i32 {
-    let s = unsafe { CStr::from_ptr(input) }.to_str().unwrap_or("");
-    s.split_whitespace().count() as i32
+    if input.is_null() {
+        return -1;
+    }
+    catch_ffi_panic(-1, || {
+        let s = unsafe { CStr::from_ptr(input) }.to_str().unwrap_or("");
+        s.split_whitespace().count() as i32
+    })
 }
 
 /// tokenize_len_batch counts whitespace tokens for a batch of C strings and
@@ -65,29 +95,36 @@ pub extern "C" fn tokenize_len_batch(inputs: *const *const c_char, len: usize) -
         return -1;
     }
 
-    let arr = unsafe { slice::from_raw_parts(inputs, len) };
-    let mut total = 0_i64;
-    for &ptr in arr {
-        if ptr.is_null() {
-            continue;
+    catch_ffi_panic(-1, || {
+        let arr = unsafe { slice::from_raw_parts(inputs, len) };
+        let mut total = 0_i64;
+        for &ptr in arr {
+            if ptr.is_null() {
+                continue;
+            }
+            let s = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap_or("");
+            total += s.split_whitespace().count() as i64;
         }
-        let s = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap_or("");
-        total += s.split_whitespace().count() as i64;
-    }
-    total
+        total
+    })
 }
 
 /// bpe_count_tokens returns the BPE token count for `input`. Falls back to
 /// whitespace splitting if the tokenizer has not been initialised via bpe_train.
 #[unsafe(no_mangle)]
 pub extern "C" fn bpe_count_tokens(input: *const c_char) -> i32 {
-    let s = unsafe { CStr::from_ptr(input) }
-        .to_str()
-        .unwrap_or("");
-    match TOKENIZER.get() {
-        Some(tok) => tok.encode(s).len() as i32,
-        None => tokenize_len(input), // fall back to whitespace splitting
+    if input.is_null() {
+        return -1;
     }
+    catch_ffi_panic(-1, || {
+        let s = unsafe { CStr::from_ptr(input) }
+            .to_str()
+            .unwrap_or("");
+        match TOKENIZER.get() {
+            Some(tok) => tok.encode(s).len() as i32,
+            None => tokenize_len(input), // fall back to whitespace splitting
+        }
+    })
 }
 
 /// bpe_encode_len_batch returns the total number of BPE token IDs across a
@@ -105,14 +142,16 @@ pub extern "C" fn bpe_encode_len_batch(inputs: *const *const c_char, len: usize)
         return -1;
     }
 
-    let arr = unsafe { slice::from_raw_parts(inputs, len) };
-    let mut total = 0_i64;
-    for &ptr in arr {
-        if ptr.is_null() {
-            continue;
+    catch_ffi_panic(-1, || {
+        let arr = unsafe { slice::from_raw_parts(inputs, len) };
+        let mut total = 0_i64;
+        for &ptr in arr {
+            if ptr.is_null() {
+                continue;
+            }
+            let s = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap_or("");
+            total += tok.encode(s).len() as i64;
         }
-        let s = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap_or("");
-        total += tok.encode(s).len() as i64;
-    }
-    total
+        total
+    })
 }

@@ -2,9 +2,9 @@
 
 This document records intentional constraints and operational caveats for Distri-Inference-Sidecar as of the current release.
 
-## VRAM threshold constants are not configurable via environment variables
+## VRAM thresholds are configurable via environment variables
 
-`OOMThresholdPct` (default **90**) and `CloseThresholdPct` (default **85**) are hard-coded in `cmd/sidecar/main.go`. To change the hysteresis band you must edit the source and rebuild the sidecar binary. There is no `OOM_THRESHOLD_PCT` or `CLOSE_THRESHOLD_PCT` env var yet.
+`OOM_THRESHOLD_PCT` (default **90**), `CLOSE_THRESHOLD_PCT` (default **85**) and `POLL_INTERVAL_MS` (default **500**) can be set through environment variables; values are validated at startup. See [configuration.md](configuration.md).
 
 ## gRPC client cancellation does not dequeue early
 
@@ -43,7 +43,7 @@ Without this step you will see link errors (`librust_ops.so: cannot open shared 
 
 ## Micro-batching vs GPU throughput with Ollama
 
-Benchmarks on `qwen2.5:1.5b` via Ollama on RTX 4060 (100 concurrent, 5 rounds, NVML mode) show **identical end-to-end throughput** with and without batching (**1.66 req/s**) because Ollama serialises GPU inference. The main win from micro-batching is **fewer sidecar→backend HTTP calls** (500 requests → 66 flushes, average batch size 7.6, ~87% reduction), plus slightly more stable tail latency (p95 60.1 s vs 60.2 s). Do not expect batching alone to multiply GPU token throughput until the runtime supports true parallel or continuous batching.
+Benchmarks on `qwen2.5:1.5b` via Ollama on RTX 4060 (100 concurrent, 5 rounds, NVML mode) remain **GPU-bound**: Ollama serialises inference, so micro-batching does not raise successful end-to-end throughput. The main win is **fewer sidecar→backend HTTP calls** (latest run: **501 → 66 flushes**, average batch size **7.6**, ~**87%** reduction). At this concurrency, p99 latency often approaches the 120 s timeout budget, so client / backend deadline errors are expected unless timeouts are raised or concurrency is lowered. Do not expect batching alone to multiply GPU token throughput until the runtime supports true parallel or continuous batching. See [benchmarks.md](benchmarks.md).
 
 ## Mixed `model_name` values in one batch
 

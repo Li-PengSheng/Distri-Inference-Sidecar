@@ -7,6 +7,7 @@
 package vramguard
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -58,7 +59,7 @@ type Guard struct {
 }
 
 type nvmlReader struct {
-	device nvml.Device
+	devices []nvml.Device
 }
 
 type smiReader struct{}
@@ -208,25 +209,58 @@ func newNVMLReader() (*nvmlReader, bool) {
 		return nil, false
 	}
 
-	device, ret := nvml.DeviceGetHandleByIndex(0)
-	if ret != nvml.SUCCESS {
-		slog.Warn("NVML device lookup failed", "err", nvml.ErrorString(ret))
+	count, ret := nvml.DeviceGetCount()
+	if ret != nvml.SUCCESS || count == 0 {
+		slog.Warn("NVML device enumeration failed", "count", count, "err", nvml.ErrorString(ret))
 		nvml.Shutdown()
 		return nil, false
 	}
 
-	return &nvmlReader{device: device}, true
+	devices := make([]nvml.Device, 0, count)
+	for i := 0; i < count; i++ {
+		device, ret := nvml.DeviceGetHandleByIndex(i)
+		if ret != nvml.SUCCESS {
+			slog.Warn("NVML device lookup failed", "index", i, "err", nvml.ErrorString(ret))
+			continue
+		}
+		devices = append(devices, device)
+	}
+	if len(devices) == 0 {
+		nvml.Shutdown()
+		return nil, false
+	}
+
+	slog.Info("NVML reader initialized", "gpu_count", len(devices))
+	return &nvmlReader{devices: devices}, true
 }
 
 func (r *nvmlReader) Name() string { return "nvml" }
 
+// ReadUsageMB reports the reading of the most-utilised GPU so the circuit
+// breaker reacts to whichever device is closest to OOM.
 func (r *nvmlReader) ReadUsageMB() (used, total float64, err error) {
-	mem, ret := nvml.DeviceGetMemoryInfo(r.device)
-	if ret != nvml.SUCCESS {
-		return 0, 0, fmt.Errorf("nvml DeviceGetMemoryInfo failed: %s", nvml.ErrorString(ret))
-	}
 	const mib = 1024 * 1024
-	return float64(mem.Used) / mib, float64(mem.Total) / mib, nil
+	found := false
+	for i, device := range r.devices {
+		mem, ret := nvml.DeviceGetMemoryInfo(device)
+		if ret != nvml.SUCCESS {
+			slog.Warn("nvml DeviceGetMemoryInfo failed", "index", i, "err", nvml.ErrorString(ret))
+			continue
+		}
+		if mem.Total == 0 {
+			continue
+		}
+		u := float64(mem.Used) / mib
+		t := float64(mem.Total) / mib
+		if !found || u/t > used/total {
+			used, total = u, t
+			found = true
+		}
+	}
+	if !found {
+		return 0, 0, fmt.Errorf("nvml: no GPU produced a valid memory reading")
+	}
+	return used, total, nil
 }
 
 func (r *nvmlReader) Close() {
@@ -244,25 +278,63 @@ func (r *smiReader) ReadUsageMB() (used, total float64, err error) {
 
 func (r *smiReader) Close() {}
 
+// smiTimeout bounds each nvidia-smi invocation so a hung driver cannot stall
+// the polling loop indefinitely.
+const smiTimeout = 5 * time.Second
+
 // queryVRAM runs nvidia-smi and parses used and total VRAM in megabytes.
-// It returns an error if nvidia-smi is unavailable or produces unexpected output.
+// It returns an error if nvidia-smi is unavailable, times out, or produces
+// unexpected output; the caller (pollOnce) keeps the last known readings.
 func queryVRAMViaSMI() (used, total float64, err error) {
-	out, err := exec.Command(
+	ctx, cancel := context.WithTimeout(context.Background(), smiTimeout)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx,
 		"nvidia-smi",
 		"--query-gpu=memory.used,memory.total",
 		"--format=csv,noheader,nounits",
 	).Output()
 	if err != nil {
-		// No GPU available — return safe defaults silently
-		return 0, 1024, nil
+		if ctx.Err() != nil {
+			return 0, 0, fmt.Errorf("nvidia-smi timed out after %s: %w", smiTimeout, err)
+		}
+		return 0, 0, fmt.Errorf("nvidia-smi failed: %w", err)
 	}
 	return parseSMIOutput(strings.TrimSpace(string(out)))
 }
 
+// parseSMIOutput parses nvidia-smi CSV output. Multi-GPU machines emit one
+// line per device; the reading of the most-utilised GPU is returned so the
+// circuit breaker reacts to whichever device is closest to OOM.
 func parseSMIOutput(output string) (used, total float64, err error) {
-	parts := strings.Split(output, ", ")
+	found := false
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		u, t, err := parseSMILine(line)
+		if err != nil {
+			return 0, 0, err
+		}
+		if t <= 0 {
+			continue
+		}
+		if !found || u/t > used/total {
+			used, total = u, t
+			found = true
+		}
+	}
+	if !found {
+		return 0, 0, fmt.Errorf("nvidia-smi produced no valid GPU readings: %q", output)
+	}
+	return used, total, nil
+}
+
+func parseSMILine(line string) (used, total float64, err error) {
+	parts := strings.Split(line, ", ")
 	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("unexpected nvidia-smi output: %q", output)
+		return 0, 0, fmt.Errorf("unexpected nvidia-smi output line: %q", line)
 	}
 	used, err = strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
 	if err != nil {

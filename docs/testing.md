@@ -38,15 +38,17 @@ Screenshots: [`assets/benchmarks/nvml.png`](../assets/benchmarks/nvml.png), [`as
 
 ```bash
 # No batching
-MAX_BATCH_SIZE=1 MAX_WAIT_MS=0 VRAM_READER_MODE=nvml \
-  docker compose -p distribute up -d --build --force-recreate sidecar
+MAX_BATCH_SIZE=1 MAX_WAIT_MS=0 VRAM_READER_MODE=nvml BACKEND_TIMEOUT_MS=120000 \
+  docker compose -p distribute up -d --force-recreate sidecar
 cd python_backend
-uv run benchmark/batching_bench.py --concurrent 100 --rounds 5 --json
+uv run benchmark/batching_bench.py --concurrent 100 --rounds 5 --timeout 180 --json
+
+# Cool down / recreate before the second scenario (recommended)
 
 # Default batching
-MAX_BATCH_SIZE=8 MAX_WAIT_MS=50 VRAM_READER_MODE=nvml \
-  docker compose -p distribute up -d --build --force-recreate sidecar
-uv run benchmark/batching_bench.py --concurrent 100 --rounds 5 --json
+MAX_BATCH_SIZE=8 MAX_WAIT_MS=50 VRAM_READER_MODE=nvml BACKEND_TIMEOUT_MS=120000 \
+  docker compose -p distribute up -d --force-recreate sidecar
+uv run benchmark/batching_bench.py --concurrent 100 --rounds 5 --timeout 180 --json
 ```
 
 See [benchmarks.md](benchmarks.md#batching-throughput-with-vs-without-micro-batching) for latest numbers.
