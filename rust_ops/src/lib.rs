@@ -5,8 +5,10 @@ use std::os::raw::c_char;
 use std::panic::{self, AssertUnwindSafe};
 use std::slice;
 
-// Global BPE tokenizer instance, initialized exactly once via bpe_train.
-// OnceLock ensures thread-safe lazy initialization without a Mutex.
+// Global BPE tokenizer instance, published exactly once via bpe_train.
+// OnceLock permits concurrent reads without a Mutex, which matters because
+// multiple gRPC handlers can count tokens after startup. A later bpe_train call
+// still performs local training but cannot replace the published tokenizer.
 use std::sync::OnceLock;
 mod bpe_token;
 use bpe_token::BPETokenizer;
@@ -26,8 +28,10 @@ fn catch_ffi_panic<T>(fallback: T, f: impl FnOnce() -> T) -> T {
     }
 }
 
-/// free_string releases a C string that was previously allocated by Rust with
-/// `CString::into_raw`. Do not call this on strings allocated outside Rust.
+/// free_string releases a C string previously allocated by this library with
+/// `CString::into_raw`. It is a reserved C-ABI ownership utility; the current
+/// tokenizer exports do not return Rust-owned strings. Do not call it on a
+/// pointer allocated outside this library.
 ///
 /// # Safety
 /// `s` must have been produced by `CString::into_raw` from within this library.
@@ -38,9 +42,14 @@ pub extern "C" fn free_string(s: *mut c_char) {
     }
 }
 
-/// bpe_train trains the global BPE tokenizer on `text` with the given
-/// `vocab_size`. It must be called once before any call to bpe_count_tokens or
-/// bpe_encode_len. Subsequent calls are silently ignored.
+/// bpe_train trains a tokenizer on the null-terminated `text` using
+/// `vocab_size`, then attempts to publish it as the process-global tokenizer.
+///
+/// The first successful call wins because the tokenizer is shared by all Go
+/// callers and changing it at runtime would make admission limits inconsistent
+/// between concurrent requests. Later calls still perform training but their
+/// result is discarded by `OnceLock`; null input and caught panics have no
+/// observable return value because this C ABI function returns `void`.
 #[unsafe(no_mangle)]
 pub extern "C" fn bpe_train(text: *const c_char, vocab_size: usize) {
     if text.is_null() {
@@ -54,8 +63,10 @@ pub extern "C" fn bpe_train(text: *const c_char, vocab_size: usize) {
     });
 }
 
-/// bpe_encode_len returns the number of BPE token IDs produced by encoding
-/// `input`. Returns -1 if the tokenizer has not been initialized.
+/// bpe_encode_len returns the number of BPE token IDs produced by encoding the
+/// null-terminated `input`. It returns -1 when the tokenizer is uninitialised,
+/// input is null, or a panic is caught at the FFI boundary. Invalid UTF-8 input
+/// is treated as an empty string by the C-string conversion.
 #[unsafe(no_mangle)]
 pub extern "C" fn bpe_encode_len(input: *const c_char) -> i32 {
     if input.is_null() {
@@ -70,8 +81,10 @@ pub extern "C" fn bpe_encode_len(input: *const c_char) -> i32 {
     })
 }
 
-/// tokenize_len counts tokens by splitting on whitespace. Kept as a reference
-/// implementation and fallback for comparison against the BPE tokenizer.
+/// tokenize_len counts whitespace-delimited tokens in null-terminated `input`.
+/// It is retained as a simple reference implementation and bpe_count_tokens
+/// fallback. It returns -1 for null input or a caught FFI panic; invalid UTF-8
+/// is treated as an empty string.
 #[unsafe(no_mangle)]
 pub extern "C" fn tokenize_len(input: *const c_char) -> i32 {
     if input.is_null() {
@@ -84,8 +97,10 @@ pub extern "C" fn tokenize_len(input: *const c_char) -> i32 {
 }
 
 /// tokenize_len_batch counts whitespace tokens for a batch of C strings and
-/// returns the total token count across all inputs. This avoids per-input FFI
-/// overhead for Python benchmarks.
+/// returns the total token count across all non-null inputs. This avoids
+/// per-input FFI overhead for Python benchmarks. It returns -1 when `inputs`
+/// is null or a panic is caught; null elements are skipped and invalid UTF-8
+/// elements contribute zero tokens.
 ///
 /// # Safety
 /// `inputs` must point to an array of `len` valid, null-terminated C strings.
@@ -109,8 +124,12 @@ pub extern "C" fn tokenize_len_batch(inputs: *const *const c_char, len: usize) -
     })
 }
 
-/// bpe_count_tokens returns the BPE token count for `input`. Falls back to
-/// whitespace splitting if the tokenizer has not been initialised via bpe_train.
+/// bpe_count_tokens returns the BPE token count for `input` after
+/// `bpe_train` has initialised the global tokenizer. Before initialisation it
+/// deliberately falls back to whitespace splitting so callers can still obtain
+/// a count; sidecar admission must call `bpe_train` first to ensure its limit
+/// is based on BPE tokens. It returns -1 for null input or a panic caught at
+/// the FFI boundary; invalid UTF-8 is treated as an empty string.
 #[unsafe(no_mangle)]
 pub extern "C" fn bpe_count_tokens(input: *const c_char) -> i32 {
     if input.is_null() {
@@ -128,7 +147,9 @@ pub extern "C" fn bpe_count_tokens(input: *const c_char) -> i32 {
 }
 
 /// bpe_encode_len_batch returns the total number of BPE token IDs across a
-/// batch of inputs. Returns -1 if the tokenizer is not initialized.
+/// batch of non-null inputs. Returns -1 if the tokenizer is uninitialised,
+/// `inputs` is null, or a panic is caught at the FFI boundary. Null elements
+/// are skipped and invalid UTF-8 elements contribute zero tokens.
 ///
 /// # Safety
 /// `inputs` must point to an array of `len` valid, null-terminated C strings.

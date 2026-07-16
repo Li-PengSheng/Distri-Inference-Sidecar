@@ -12,11 +12,11 @@ When a caller cancels or times out, the request may already be sitting in the ba
 
 Practical effect: a cancelled request still occupies a queue slot (capacity 1 000) until its batch is flushed or the process stops. Under heavy cancel churn this can delay other work even though no backend compute is wasted.
 
-## Prometheus startup depends on sidecar health
+## Prometheus startup depends on sidecar liveness
 
-In `docker-compose.yaml`, `prometheus` uses `depends_on: sidecar: condition: service_healthy`. Prometheus will not start scraping until the sidecar passes its HTTP probe at `:9090/health`.
+In `docker-compose.yaml`, `prometheus` uses `depends_on: sidecar: condition: service_healthy`. Prometheus will not start scraping until the sidecar passes its HTTP liveness probe at `:9090/health`. That endpoint only confirms that the metrics HTTP server is running; it does not verify the VRAM reader, batcher, Python backend, or Ollama.
 
-The sidecar healthcheck is configured with **`start_period: 20s`** (plus `interval: 10s`, `timeout: 5s`, `retries: 5`). On machines **without a GPU**, NVML may be unavailable and the guard falls back to `nvidia-smi`; first boot can take longer while the stack warms up. If Prometheus stays in `starting` state, increase the sidecar `start_period` to **40–60s** in `docker-compose.yaml`:
+The sidecar healthcheck is configured with **`start_period: 20s`** (plus `interval: 10s`, `timeout: 5s`, `retries: 5`). Because the liveness endpoint is registered before VRAM polling begins, GPU or NVML initialisation does not delay this check. If the sidecar process itself needs a longer startup grace period in your environment, increase `start_period` to **40–60s** in `docker-compose.yaml`:
 
 ```yaml
 sidecar:

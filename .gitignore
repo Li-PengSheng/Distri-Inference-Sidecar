@@ -69,7 +69,8 @@ Cargo.lock
 # ============================================================
 # Protobuf / Buf
 # ============================================================
-# Generated files (already committed under gen/)
+# Generated protobuf stubs are committed under gen/ and python_backend/gen/.
+# Regenerate them from proto/inference.proto; do not hand-edit generated files.
 # gen/
 
 # Buf build cache

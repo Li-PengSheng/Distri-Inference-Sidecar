@@ -35,8 +35,9 @@ type InferenceServiceClient interface {
 	// Infer submits a single inference request. The sidecar transparently batches
 	// it with other concurrent requests before forwarding to the backend.
 	Infer(ctx context.Context, in *InferRequest, opts ...grpc.CallOption) (*InferResponse, error)
-	// HealthCheck returns live VRAM usage and circuit-breaker state. Use this to
-	// determine whether the sidecar is ready to accept new requests.
+	// HealthCheck returns the latest VRAM usage and circuit-breaker state. Its
+	// healthy field only reports whether VRAM pressure is rejecting requests; it
+	// is not a full readiness check for the sidecar or its backend dependencies.
 	HealthCheck(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
 }
 
@@ -77,8 +78,9 @@ type InferenceServiceServer interface {
 	// Infer submits a single inference request. The sidecar transparently batches
 	// it with other concurrent requests before forwarding to the backend.
 	Infer(context.Context, *InferRequest) (*InferResponse, error)
-	// HealthCheck returns live VRAM usage and circuit-breaker state. Use this to
-	// determine whether the sidecar is ready to accept new requests.
+	// HealthCheck returns the latest VRAM usage and circuit-breaker state. Its
+	// healthy field only reports whether VRAM pressure is rejecting requests; it
+	// is not a full readiness check for the sidecar or its backend dependencies.
 	HealthCheck(context.Context, *HealthRequest) (*HealthResponse, error)
 	mustEmbedUnimplementedInferenceServiceServer()
 }

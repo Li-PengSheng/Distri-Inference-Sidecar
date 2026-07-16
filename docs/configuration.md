@@ -5,7 +5,7 @@
 | Key | Default | Description |
 |---|---|---|
 | `BACKEND_URL` | required | Backend `/infer` endpoint |
-| `VRAM_READER_MODE` | `auto` | NVML-first in `auto`; falls back to `nvidia-smi` when NVML is unavailable. Force `nvml`, `smi`, or `nvidia-smi` (alias of `smi`). On RTX 4060: NVML poll p95 **< 1 ms** vs **~30 ms** for `nvidia-smi` (see [benchmarks](benchmarks.md#nvml-vs-smi-vram-polling-100-concurrent-5-rounds)) |
+| `VRAM_READER_MODE` | `auto` | `auto` and `nvml` prefer NVML, then fall back to `nvidia-smi` if NVML cannot initialise. `smi` and `nvidia-smi` force the CLI reader. On RTX 4060: NVML poll p95 **< 1 ms** vs **~30 ms** for `nvidia-smi` (see [benchmarks](benchmarks.md#nvml-vs-smi-vram-polling-100-concurrent-5-rounds)) |
 | `MAX_BATCH_SIZE` | `8` | Max requests per micro-batch before immediate flush. At 100 concurrent, avg flush size **7.6** (p95 **8.0**) |
 | `MAX_WAIT_MS` | `50` | Max wait window (ms) to collect a partial batch. On GPU-bound Ollama loads the dominant latency is inference queue time, not this window |
 | `BACKEND_TIMEOUT_MS` | `120000` | HTTP timeout (ms) per backend batch call. At 100 concurrent on Ollama, p99 often approaches this budget; raise it if you need higher completion rates |
@@ -21,7 +21,7 @@
 |---|---|---|
 | `OLLAMA_URL` | `http://host.docker.internal:11434/api/generate` | Ollama generate endpoint |
 | `DEFAULT_MODEL_NAME` | `qwen2.5:1.5b` | Model used when a request omits `model_name` |
-| `OLLAMA_TIMEOUT_S` | `120` | Per-request Ollama timeout (s); keep ≥ sidecar `BACKEND_TIMEOUT_MS` |
+| `OLLAMA_TIMEOUT_S` | `120` | Per-request Ollama timeout (s). It is independent of the sidecar's whole-batch HTTP timeout, so equal values do not guarantee that the backend responds before the sidecar deadline. |
 | `OLLAMA_MAX_CONCURRENCY` | `8` | Max in-flight Ollama requests (semaphore) |
 
 ## gRPC API (`proto/inference.proto`)
@@ -45,13 +45,13 @@
 
 | Metric | Type | Meaning |
 |--------|------|---------|
-| `infer_latency_ms` | histogram | Backend batch latency |
+| `infer_latency_ms` | histogram | Batch flush duration: JSON preparation plus the backend HTTP round trip, excluding queue wait time |
 | `batch_size` | histogram | Requests per flush |
 | `rejected_requests_total` | counter | Token-limit rejections |
 | `circuit_breaker_trips_total` | counter | VRAM guard rejections |
 | `infer_success_total` / `infer_errors_total` | counter | Per-request outcomes |
 | `queue_rejects_total` | counter | Batch queue full rejections |
-| `vram_used_mb` | gauge | Last VRAM reading |
+| `vram_used_mb` | gauge | Last VRAM reading in MiB (the historical metric name retains an MB suffix) |
 | `vram_poll_duration_ms` | histogram | VRAM poll latency |
 | `vram_poll_errors_total` | counter | VRAM poll failures |
 | `vram_reader_mode{mode=...}` | gauge | Active reader (1=active) |
@@ -81,7 +81,8 @@ internal/vramguard/     VRAM circuit breaker
 python_backend/         FastAPI execution backend
 rust_ops/               Rust tokenizer + C ABI
 proto/                  gRPC contract
-gen/                    generated Go stubs
+gen/                    generated Go stubs (do not hand-edit)
+python_backend/gen/     generated Python stubs (do not hand-edit)
 docs/                   markdown guides (no images)
 ```
 

@@ -34,7 +34,11 @@ type Config struct {
 	// CloseThresholdPct is the VRAM utilisation percentage at which an open
 	// circuit closes. Must be less than OOMThresholdPct to provide hysteresis.
 	CloseThresholdPct float64
-	// ReaderMode selects the VRAM polling backend: auto, nvml, smi, or nvidia-smi.
+	// ReaderMode selects the VRAM polling backend: auto, nvml, smi, or
+	// nvidia-smi. "smi" and "nvidia-smi" force the CLI reader; "auto" and
+	// "nvml" both prefer NVML but fall back to the CLI reader when NVML cannot
+	// be initialised. This fallback preserves availability on hosts where the
+	// NVML library or device handles are unavailable.
 	ReaderMode string
 }
 
@@ -102,7 +106,8 @@ func (g *Guard) IsOpen() bool {
 	return g.circuitOpen.Load()
 }
 
-// GetUsage returns the most recent used and total VRAM readings in megabytes.
+// GetUsage returns the most recent used and total VRAM readings in MiB. The
+// public API keeps its historical MB-oriented names for compatibility.
 func (g *Guard) GetUsage() (float64, float64) {
 	return g.UsedMB.Load().(float64), g.TotalMB.Load().(float64)
 }
@@ -140,10 +145,12 @@ func (g *Guard) Stop() {
 	})
 }
 
-// pollOnce performs a single VRAM sample, updates UsedMB/TotalMB, and applies
-// open/close hysteresis to the circuit-breaker. Poll failures leave prior
-// readings and circuit state unchanged (fail-steady: a flaky reader must not
-// flap the breaker open/closed).
+// pollOnce samples VRAM, updates UsedMB/TotalMB, and applies open/close
+// hysteresis to the circuit-breaker. A failed sample leaves prior readings and
+// state unchanged: acting on an error as zero usage could incorrectly close an
+// open breaker, while opening on every transient read failure would reject
+// healthy traffic. This fail-steady trade-off can retain a stale state, so the
+// failure is logged and counted for operators instead of being hidden.
 func (g *Guard) pollOnce() {
 	pollStart := time.Now()
 	used, total, err := g.reader.ReadUsageMB()
@@ -314,7 +321,7 @@ func (r *smiReader) Close() {}
 // the polling loop indefinitely.
 const smiTimeout = 5 * time.Second
 
-// queryVRAMViaSMI runs nvidia-smi and parses used and total VRAM in megabytes.
+// queryVRAMViaSMI runs nvidia-smi and parses used and total VRAM in MiB.
 // It returns an error if nvidia-smi is unavailable, times out, or produces
 // unexpected output; the caller (pollOnce) keeps the last known readings.
 func queryVRAMViaSMI() (used, total float64, err error) {
@@ -364,7 +371,7 @@ func parseSMIOutput(output string) (used, total float64, err error) {
 }
 
 // parseSMILine parses one nvidia-smi CSV line of the form "used, total"
-// (noheader, nounits). Both values are megabytes.
+// (noheader, nounits). Both values are reported by nvidia-smi in MiB.
 func parseSMILine(line string) (used, total float64, err error) {
 	parts := strings.Split(line, ", ")
 	if len(parts) != 2 {

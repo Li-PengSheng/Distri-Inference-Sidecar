@@ -22,14 +22,16 @@ import (
 // request. Requests exceeding this limit are rejected before batching.
 const MaxInputTokens = 512
 
-// ErrTokenizerFailure indicates the Rust tokenizer could not produce a token
-// count (uninitialised vocabulary or a panic caught at the FFI boundary).
-// Callers should treat it as an internal error, not an input-validation error.
+// ErrTokenizerFailure indicates that the Rust FFI could not produce a token
+// count, for example after a panic caught at the FFI boundary. Callers should
+// treat it as an internal error, not an input-validation error.
 var ErrTokenizerFailure = errors.New("tokenizer failure")
 
-// Init trains the BPE tokenizer on the provided corpus and must be called once
-// at process startup before any call to CountTokens or Validate. It returns an
-// error if the corpus is empty or the Rust tokenizer failed to initialise.
+// Init trains and publishes the BPE tokenizer from trainCorpus before
+// CountTokens or Validate are used for admission. It returns an error when the
+// corpus is empty or no tokenizer is available after the FFI call. The Rust
+// global tokenizer is write-once, so later Init calls validate the already
+// published tokenizer rather than replacing its vocabulary.
 func Init(trainCorpus string) error {
 	if strings.TrimSpace(trainCorpus) == "" {
 		return fmt.Errorf("tokenizer: training corpus is empty")
@@ -49,11 +51,12 @@ func Init(trainCorpus string) error {
 	return nil
 }
 
-// CountTokens returns the number of BPE tokens in input as determined by the
-// Rust tokenizer (bpe_count_tokens). Init must have succeeded first; a
-// negative return value signals a tokenizer failure (uninitialised vocabulary
-// or an FFI-side error) and should be treated as ErrTokenizerFailure by
-// callers such as Validate.
+// CountTokens returns the token count produced by Rust bpe_count_tokens for
+// input. After Init succeeds this is a BPE count. Before initialisation, the
+// Rust implementation deliberately falls back to whitespace-token counting,
+// so callers that require BPE admission must initialise first. A negative
+// result indicates an FFI-side failure and is converted to ErrTokenizerFailure
+// by Validate.
 func CountTokens(input string) int {
 	cs := C.CString(input)
 	defer C.free(unsafe.Pointer(cs))

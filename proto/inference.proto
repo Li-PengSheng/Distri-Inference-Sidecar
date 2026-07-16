@@ -12,8 +12,9 @@ service InferenceService {
   // it with other concurrent requests before forwarding to the backend.
   rpc Infer(InferRequest) returns (InferResponse);
 
-  // HealthCheck returns live VRAM usage and circuit-breaker state. Use this to
-  // determine whether the sidecar is ready to accept new requests.
+  // HealthCheck returns the latest VRAM usage and circuit-breaker state. Its
+  // healthy field only reports whether VRAM pressure is rejecting requests; it
+  // is not a full readiness check for the sidecar or its backend dependencies.
   rpc HealthCheck(HealthRequest) returns (HealthResponse);
 }
 
@@ -22,8 +23,9 @@ message InferRequest {
   // request_id is a caller-assigned unique identifier used to correlate the
   // response. It is echoed unchanged in InferResponse.request_id.
   string request_id = 1;
-  // input_data is the raw model input payload. The encoding format is
-  // model-specific and agreed upon between the caller and the backend.
+  // input_data contains prompt bytes. The Go sidecar's JSON HTTP adapter
+  // serializes bytes as base64; the Python backend defines how the received
+  // value is decoded before it is passed to Ollama.
   bytes  input_data = 2;
   // model_name identifies which model the backend should execute.
   string model_name = 3;
@@ -36,8 +38,10 @@ message InferResponse {
   // output_data is the raw model output returned by the backend. Empty when
   // error is set.
   bytes  output_data = 2;
-  // latency_ms is the end-to-end backend latency for the batch that contained
-  // this request, measured in milliseconds.
+  // latency_ms is the batch flush duration for the batch containing this
+  // request, measured in milliseconds. It excludes time spent waiting in the
+  // sidecar batch queue and includes JSON preparation plus the backend HTTP
+  // round trip.
   int64  latency_ms  = 3;
   // error is non-empty when the request or the batch failed. Callers should
   // check this field before using output_data.
@@ -47,13 +51,15 @@ message InferResponse {
 // HealthRequest is an empty placeholder; no input is required.
 message HealthRequest {}
 
-// HealthResponse reports the current health of the sidecar.
+// HealthResponse reports VRAM admission state, not full service readiness.
 message HealthResponse {
-  // healthy is true when the VRAM circuit-breaker is closed, meaning the
-  // sidecar is accepting new inference requests.
+  // healthy is true when the VRAM circuit-breaker is closed. It does not imply
+  // that all sidecar dependencies are reachable or ready.
   bool   healthy      = 1;
-  // vram_used_mb is the GPU VRAM currently consumed, in megabytes.
+  // vram_used_mb is the latest GPU VRAM consumption in MiB. The field name
+  // retains its MB suffix for compatibility.
   float  vram_used_mb  = 2;
-  // vram_total_mb is the total GPU VRAM available, in megabytes.
+  // vram_total_mb is the latest total GPU VRAM in MiB. The field name retains
+  // its MB suffix for compatibility.
   float  vram_total_mb = 3;
 }

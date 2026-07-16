@@ -12,13 +12,15 @@ import (
 
 // Metrics holds the Prometheus collectors used across the sidecar.
 type Metrics struct {
-	// InferLatency tracks the end-to-end backend latency (ms) for each batch flush.
+	// InferLatency tracks batch flush duration in milliseconds. It starts inside
+	// Batcher.flushBatch and therefore excludes time spent waiting in the queue.
 	InferLatency prometheus.Histogram
 	// BatchSize tracks how many requests were grouped into each flushed batch.
 	BatchSize prometheus.Histogram
 	// CircuitBreakerTrips counts requests rejected because the VRAM guard is open.
 	CircuitBreakerTrips prometheus.Counter
-	// VRAMUsedMB reports the current GPU VRAM consumption in megabytes.
+	// VRAMUsedMB reports the latest GPU VRAM consumption in MiB. The field and
+	// metric names retain the historical MB suffix for compatibility.
 	VRAMUsedMB       prometheus.Gauge
 	// RejectedRequests counts prompts rejected by tokenizer admission
 	// (token count above MaxInputTokens).
@@ -117,7 +119,11 @@ func registerMetrics(reg prometheus.Registerer) *Metrics {
 	return m
 }
 
-// StartHTTPServer serves /metrics and /health on addr in a background goroutine.
+// StartHTTPServer serves /metrics and a process-liveness /health endpoint on
+// addr in a background goroutine, then returns the server for later shutdown.
+// /health returns 200 whenever this HTTP server is running; it intentionally
+// does not probe the batcher, VRAM reader, Python backend, or Ollama, so it is
+// not a readiness or dependency-health check.
 func (m *Metrics) StartHTTPServer(addr string) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())

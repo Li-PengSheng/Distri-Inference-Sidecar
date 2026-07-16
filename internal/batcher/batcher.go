@@ -31,8 +31,9 @@ type Config struct {
 	// MaxBatchSize is the maximum number of requests collected into one batch
 	// before it is flushed immediately, regardless of MaxWaitMs.
 	MaxBatchSize int
-	// MaxWaitMs is the maximum time in milliseconds the batcher will wait to
-	// fill a batch before flushing whatever it has collected so far.
+	// MaxWaitMs is the requested upper collection window in milliseconds before
+	// a partial batch is flushed. Very small values, including 0, are rounded up
+	// to the internal 1 ms minimum to prevent an idle busy loop.
 	MaxWaitMs int
 	// BackendURL is the HTTP endpoint that receives batched inference requests,
 	// e.g. "http://localhost:8000/infer".
@@ -50,7 +51,9 @@ type Request struct {
 	// ID is a unique identifier used to correlate the batch response back to
 	// this specific request.
 	ID string
-	// InputData is the raw model input payload (encoding is model-specific).
+	// InputData contains the prompt bytes. The Go JSON encoder represents this
+	// []byte value as a base64 string on the HTTP hop; the Python backend owns
+	// the corresponding decoding and prompt interpretation contract.
 	InputData []byte
 	// ModelName identifies which model the backend should run.
 	ModelName string
@@ -58,18 +61,20 @@ type Request struct {
 	// flushBatch before the backend call; not used to cancel the batch HTTP
 	// request itself (one cancelled client must not abort siblings).
 	Ctx context.Context
-	// ResultCh receives exactly one Result when the batch containing this
-	// request has been processed (or failed). Callers should use a buffer of
-	// at least 1 so a departed client does not block fan-out.
+	// ResultCh receives exactly one terminal Result when the batch containing
+	// this request succeeds, fails, or is drained during shutdown. It must be
+	// buffered to at least 1: a caller may leave after Ctx is cancelled, while
+	// the flush goroutine must still complete fan-out without becoming blocked.
 	ResultCh chan Result
 }
 
 // Result carries the outcome of a single inference request.
 type Result struct {
-	// OutputData is the raw model output returned by the backend.
+	// OutputData contains the textual backend output as bytes.
 	OutputData []byte
-	// LatencyMs is the end-to-end backend latency for the batch that contained
-	// this request, measured in milliseconds.
+	// LatencyMs is the batch flush duration in milliseconds, measured from the
+	// start of flushBatch through the HTTP round trip. It excludes time spent
+	// waiting in the batch queue and is shared by every request in the batch.
 	LatencyMs int64
 	// Err is non-nil when the request or batch failed.
 	Err error
@@ -211,7 +216,9 @@ func (b *Batcher) Start() {
 }
 
 // Stop ends queue processing and waits for in-flight batch flushes to finish.
-// Pending requests receive a terminal error on ResultCh.
+// Requests still in the queue receive a terminal error; a batch already
+// collected by the main loop is flushed so its callers can still receive its
+// backend outcome.
 //
 // The queue channel is intentionally never closed: closing it would race with
 // concurrent Submit calls (send on closed channel panics). Instead, Stop marks
@@ -256,9 +263,11 @@ func (b *Batcher) failRequest(req *Request, err error) {
 	req.ResultCh <- Result{Err: err}
 }
 
-// flushBatch serialises the batch into a JSON payload, posts it to the backend,
-// and fans each per-request result back through the corresponding ResultCh.
-// It is called concurrently (via goroutine) for each collected batch.
+// flushBatch serialises batch into a JSON payload, posts it to the backend, and
+// fans each per-request result back through the corresponding ResultCh. It is
+// called concurrently for each collected batch. Its reported latency begins
+// here rather than at Submit, intentionally measuring batch-flush work instead
+// of caller-visible queueing latency.
 func (b *Batcher) flushBatch(batch []*Request) {
 	start := time.Now()
 
@@ -280,9 +289,9 @@ func (b *Batcher) flushBatch(batch []*Request) {
 	}
 	batch = active
 
-	// Key by ID for fan-out. Slice values keep FIFO order when clients reuse
-	// the same RequestId within one batch (otherwise a map[string]*Request
-	// would silently drop all but one waiter).
+	// Key by ID for fan-out. Slice values preserve FIFO cardinality when clients
+	// reuse a RequestId within one batch; a map to one request would silently
+	// discard waiters and violate ResultCh's one-terminal-result contract.
 	reqMap := make(map[string][]*Request, len(batch))
 	for _, r := range batch {
 		reqMap[r.ID] = append(reqMap[r.ID], r)
@@ -321,8 +330,10 @@ func (b *Batcher) flushBatch(batch []*Request) {
 		return
 	}
 
-	// Detached from any single caller ctx: one cancelled client must not abort
-	// the whole batch HTTP call. Timeout is bounded by httpClient.Timeout.
+	// Detached from every caller context: cancelling one caller must not abort
+	// useful work for its batch siblings. The trade-off is that an abandoned
+	// request can remain in an already-started backend batch; the bounded client
+	// timeout prevents that shared work from running indefinitely.
 	ctx, cancel := context.WithTimeout(context.Background(), b.httpClient.Timeout)
 	defer cancel()
 
@@ -464,10 +475,11 @@ const minCollectWait = time.Millisecond
 
 // dynamicWaitMs returns the collection window for the next batch. Higher
 // observed QPS lengthens the wait (up to MaxWaitMs) so batches fill larger;
-// lower QPS shortens it for lower latency. Thresholds (50 / 100 QPS) are
-// coarse heuristics tied to currentQPS from trackQPS. The result is never
-// below minCollectWait, which prevents a busy-loop when MaxWaitMs is very
-// small (integer division would otherwise yield 0).
+// lower QPS shortens it to avoid imposing the full batch delay on sparse
+// traffic. The 50/100-QPS thresholds and quarter/half/full windows are
+// deliberately simple workload heuristics, not a queueing-model guarantee;
+// MaxWaitMs remains the primary operator-controlled latency bound. The result
+// is never below minCollectWait, preventing a busy-loop for very small values.
 func (b *Batcher) dynamicWaitMs() time.Duration {
 	qps := b.currentQPS.Load()
 	var wait time.Duration

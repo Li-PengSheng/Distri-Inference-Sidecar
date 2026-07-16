@@ -40,8 +40,9 @@ class InferenceServiceServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def HealthCheck(self, request, context):
-        """HealthCheck returns live VRAM usage and circuit-breaker state. Use this to
-        determine whether the sidecar is ready to accept new requests.
+        """HealthCheck returns the latest VRAM usage and circuit-breaker state. Its
+        healthy field only reports whether VRAM pressure is rejecting requests; it
+        is not a full readiness check for the sidecar or its backend dependencies.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

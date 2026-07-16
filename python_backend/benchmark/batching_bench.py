@@ -24,6 +24,13 @@ MODEL_NAME = "qwen2.5:1.5b"
 
 
 def percentile(values: list[int], p: float) -> int:
+    """Return the benchmark's nearest-rank-style percentile for integer samples.
+
+    Empty input returns 0 so an all-failure run still produces a machine-readable
+    result. The index uses ``int(len(values) * p)`` capped at the last sample;
+    it is intentionally a lightweight reporting statistic rather than an
+    interpolated percentile implementation.
+    """
     if not values:
         return 0
     ordered = sorted(values)
@@ -32,6 +39,13 @@ def percentile(values: list[int], p: float) -> int:
 
 
 def send_request(i: int, timeout_s: int) -> dict:
+    """Issue one independently timed gRPC inference request for benchmark item ``i``.
+
+    A channel is created and closed per request so worker threads do not share
+    gRPC client state. Transport failures and backend-reported errors are both
+    returned as data, allowing the benchmark to report partial success instead
+    of aborting the entire concurrent scenario.
+    """
     prompt = f"Question {i}: What is {i} + {i}?"
     t0 = time.perf_counter()
     channel = grpc.insecure_channel(GRPC_ADDR)
@@ -55,6 +69,22 @@ def send_request(i: int, timeout_s: int) -> dict:
 
 
 def run_benchmark(concurrent: int, rounds: int, timeout_s: int, warmup: bool = True) -> dict:
+    """Run ``rounds`` concurrent request waves and return aggregate measurements.
+
+    Args:
+        concurrent: Requests submitted simultaneously in each round.
+        rounds: Number of independently timed waves.
+        timeout_s: Per-RPC client deadline in seconds.
+        warmup: Whether to send one excluded request before measurement.
+
+    Returns:
+        A JSON-serialisable summary containing successful-request latency,
+        throughput, error count, and up to three representative errors.
+
+    The warmup intentionally does not contribute to totals: it reduces startup
+    effects without claiming that the first cold request represents steady-state
+    batching behaviour.
+    """
     all_latencies: list[int] = []
     errors: list[str] = []
     total_elapsed_s = 0.0
@@ -92,6 +122,11 @@ def run_benchmark(concurrent: int, rounds: int, timeout_s: int, warmup: bool = T
 
 
 def main():
+    """Parse benchmark options, run the selected scenario, and set the exit code.
+
+    JSON mode is intended for automation; both output modes exit non-zero when
+    at least one measured request fails.
+    """
     parser = argparse.ArgumentParser(description="Sidecar batching benchmark")
     parser.add_argument("--concurrent", type=int, default=100)
     parser.add_argument("--rounds", type=int, default=5)

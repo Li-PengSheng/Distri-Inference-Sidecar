@@ -196,8 +196,10 @@ func statusFromContextErr(err error) error {
 	return status.Error(codes.Canceled, err.Error())
 }
 
-// HealthCheck returns the current VRAM utilisation and whether the
-// circuit-breaker is closed (healthy = true) or open (healthy = false).
+// HealthCheck returns the latest VRAM reading and the VRAM circuit-breaker
+// state. Healthy is true exactly when the breaker is closed, meaning this
+// check sees no VRAM-pressure rejection. It does not verify that the batcher,
+// Python backend, Ollama, or VRAM reader itself is otherwise ready.
 func (s *Server) HealthCheck(ctx context.Context, _ *pb.HealthRequest) (*pb.HealthResponse, error) {
 	usedMB, totalMB := s.batcher.GetGuard().GetUsage()
 	return &pb.HealthResponse{

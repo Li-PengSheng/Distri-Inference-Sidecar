@@ -30,8 +30,9 @@ type InferRequest struct {
 	// request_id is a caller-assigned unique identifier used to correlate the
 	// response. It is echoed unchanged in InferResponse.request_id.
 	RequestId string `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	// input_data is the raw model input payload. The encoding format is
-	// model-specific and agreed upon between the caller and the backend.
+	// input_data contains prompt bytes. The Go sidecar's JSON HTTP adapter
+	// serializes bytes as base64; the Python backend defines how the received
+	// value is decoded before it is passed to Ollama.
 	InputData []byte `protobuf:"bytes,2,opt,name=input_data,json=inputData,proto3" json:"input_data,omitempty"`
 	// model_name identifies which model the backend should execute.
 	ModelName     string `protobuf:"bytes,3,opt,name=model_name,json=modelName,proto3" json:"model_name,omitempty"`
@@ -98,8 +99,10 @@ type InferResponse struct {
 	// output_data is the raw model output returned by the backend. Empty when
 	// error is set.
 	OutputData []byte `protobuf:"bytes,2,opt,name=output_data,json=outputData,proto3" json:"output_data,omitempty"`
-	// latency_ms is the end-to-end backend latency for the batch that contained
-	// this request, measured in milliseconds.
+	// latency_ms is the batch flush duration for the batch containing this
+	// request, measured in milliseconds. It excludes time spent waiting in the
+	// sidecar batch queue and includes JSON preparation plus the backend HTTP
+	// round trip.
 	LatencyMs int64 `protobuf:"varint,3,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
 	// error is non-empty when the request or the batch failed. Callers should
 	// check this field before using output_data.
@@ -203,15 +206,17 @@ func (*HealthRequest) Descriptor() ([]byte, []int) {
 	return file_inference_proto_rawDescGZIP(), []int{2}
 }
 
-// HealthResponse reports the current health of the sidecar.
+// HealthResponse reports VRAM admission state, not full service readiness.
 type HealthResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// healthy is true when the VRAM circuit-breaker is closed, meaning the
-	// sidecar is accepting new inference requests.
+	// healthy is true when the VRAM circuit-breaker is closed. It does not imply
+	// that all sidecar dependencies are reachable or ready.
 	Healthy bool `protobuf:"varint,1,opt,name=healthy,proto3" json:"healthy,omitempty"`
-	// vram_used_mb is the GPU VRAM currently consumed, in megabytes.
+	// vram_used_mb is the latest GPU VRAM consumption in MiB. The field name
+	// retains its MB suffix for compatibility.
 	VramUsedMb float32 `protobuf:"fixed32,2,opt,name=vram_used_mb,json=vramUsedMb,proto3" json:"vram_used_mb,omitempty"`
-	// vram_total_mb is the total GPU VRAM available, in megabytes.
+	// vram_total_mb is the latest total GPU VRAM in MiB. The field name retains
+	// its MB suffix for compatibility.
 	VramTotalMb   float32 `protobuf:"fixed32,3,opt,name=vram_total_mb,json=vramTotalMb,proto3" json:"vram_total_mb,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

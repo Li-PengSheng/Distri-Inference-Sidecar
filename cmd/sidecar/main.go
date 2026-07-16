@@ -5,7 +5,7 @@
 //     before they reach the batcher.
 //   - vramguard: polls GPU VRAM (NVML preferred, nvidia-smi fallback) and
 //     opens a hysteretic circuit-breaker when utilisation exceeds the OOM
-//     threshold; the circuit closes only after usage drops below
+//     threshold; the circuit closes only after usage reaches or falls below
 //     CloseThresholdPct.
 //   - batcher: collects gRPC inference requests into micro-batches and
 //     forwards them as a single HTTP call to the Python backend.
@@ -188,8 +188,10 @@ func parseBoolEnv(key string) bool {
 }
 
 // loadAndValidateConfig reads required and optional environment variables,
-// applies defaults, and aborts the process on invalid values. See
-// docs/configuration.md for the full variable list.
+// applies defaults, and aborts the process on invalid values. It validates the
+// requested VRAM reader mode but does not guarantee that NVML is available;
+// vramguard.New performs its documented runtime fallback to nvidia-smi. See
+// docs/configuration.md for the full variable list and operational semantics.
 func loadAndValidateConfig() runtimeConfig {
 	backendURL := strings.TrimSpace(os.Getenv("BACKEND_URL"))
 	if backendURL == "" {
