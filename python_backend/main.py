@@ -1,3 +1,10 @@
+"""Execution-only FastAPI inference backend for the Distri-Inference-Sidecar.
+
+Receives batched POST /infer payloads from the Go sidecar, forwards each
+prompt to Ollama under a concurrency semaphore, and returns per-request
+results. Token admission and VRAM policy live in the sidecar, not here.
+"""
+
 import asyncio
 import os
 import sys
@@ -12,7 +19,6 @@ import uvicorn
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
 
-
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434/api/generate")
 DEFAULT_MODEL_NAME = os.getenv("DEFAULT_MODEL_NAME", "qwen2.5:1.5b")
 # Default matches the sidecar's BACKEND_TIMEOUT_MS (120 s) so the Python side
@@ -24,18 +30,24 @@ OLLAMA_MAX_CONCURRENCY = int(os.getenv("OLLAMA_MAX_CONCURRENCY", "8"))
 
 
 class SingleReq(BaseModel):
+    """One inference item inside a batch (mirrors the sidecar JSON shape)."""
+
     id: str
     input_data: bytes
     model_name: str
 
 
 class BatchPayload(BaseModel):
+    """Request body for POST /infer: a list of SingleReq items."""
+
     requests: List[SingleReq]
 
 
 async def call_ollama(
     client: httpx.AsyncClient, semaphore: asyncio.Semaphore, req: SingleReq
 ) -> dict:
+    """Call Ollama for one request; always returns an id/output_data/error dict."""
+
     prompt = req.input_data.decode("utf-8", errors="replace")
 
     try:
@@ -58,6 +70,8 @@ async def call_ollama(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Create a shared httpx client and Ollama concurrency semaphore."""
+
     client = httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_S)
     app.state.http_client = client
     app.state.ollama_semaphore = asyncio.Semaphore(OLLAMA_MAX_CONCURRENCY)
@@ -82,6 +96,8 @@ async def infer(payload: BatchPayload, request: Request):
 
 @app.get("/health")
 async def health():
+    """Liveness probe used by compose/ops; does not query Ollama."""
+
     return {
         "status": "ok",
         "model": DEFAULT_MODEL_NAME,

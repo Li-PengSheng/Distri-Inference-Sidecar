@@ -1,9 +1,11 @@
 // Package vramguard implements a GPU VRAM circuit-breaker.
 //
-// A Guard polls nvidia-smi at a configurable interval. When VRAM utilisation
-// rises above OOMThresholdPct the circuit opens: IsOpen returns true and the
-// batcher stops enqueuing new requests. The circuit closes automatically once
-// utilisation drops back below the threshold.
+// A Guard polls GPU memory at a configurable interval through a pluggable
+// Reader (NVML preferred; nvidia-smi as fallback). When VRAM utilisation rises
+// above OOMThresholdPct the circuit opens: IsOpen returns true and the batcher
+// rejects new requests. The circuit closes only after utilisation drops to or
+// below CloseThresholdPct, providing hysteresis so the breaker does not
+// flap near the OOM threshold.
 package vramguard
 
 import (
@@ -23,7 +25,8 @@ import (
 
 // Config holds the tuning parameters for the VRAM guard.
 type Config struct {
-	// PollIntervalMs is how often (in milliseconds) nvidia-smi is queried.
+	// PollIntervalMs is how often (in milliseconds) the configured Reader is
+	// queried for VRAM usage.
 	PollIntervalMs int
 	// OOMThresholdPct is the VRAM utilisation percentage at which the
 	// circuit-breaker opens. Must be in the range (0, 100].
@@ -37,14 +40,19 @@ type Config struct {
 
 // Reader reports GPU VRAM usage. It is exported for test injection.
 type Reader interface {
+	// ReadUsageMB returns used and total VRAM in mebibytes for the most
+	// utilised GPU (or the sole device). A non-nil error leaves prior
+	// Guard readings unchanged.
 	ReadUsageMB() (used, total float64, err error)
+	// Close releases any native resources held by the reader.
 	Close()
+	// Name returns a short identifier for metrics and logs (e.g. "nvml").
 	Name() string
 }
 
-// Guard monitors GPU VRAM and exposes a circuit-breaker that opens when usage
-// exceeds the configured threshold. All fields accessed concurrently use
-// atomic operations to avoid data races.
+// Guard monitors GPU VRAM and exposes a hysteretic circuit-breaker that opens
+// when usage exceeds OOMThresholdPct and closes below CloseThresholdPct.
+// All fields accessed concurrently use atomic operations to avoid data races.
 type Guard struct {
 	cfg         Config
 	circuitOpen atomic.Bool
@@ -58,19 +66,24 @@ type Guard struct {
 	TotalMB atomic.Value
 }
 
+// nvmlReader reads VRAM via the NVIDIA Management Library for each discovered
+// GPU and reports the device with the highest utilisation.
 type nvmlReader struct {
 	devices []nvml.Device
 }
 
+// smiReader reads VRAM by shelling out to nvidia-smi (CSV memory.used/total).
 type smiReader struct{}
 
-// New allocates a Guard with the given configuration and initialises the VRAM
-// counters to zero. Call Start (typically in a goroutine) to begin polling.
+// New allocates a Guard with the given configuration, selects a Reader from
+// ReaderMode, and initialises the VRAM counters to zero. Call Start (typically
+// in a goroutine) to begin polling.
 func New(cfg Config, m *metrics.Metrics) *Guard {
 	return NewWithReader(cfg, m, newVRAMReader(cfg.ReaderMode))
 }
 
 // NewWithReader creates a Guard that polls through the provided reader.
+// Prefer this constructor in tests that inject a fake Reader.
 func NewWithReader(cfg Config, m *metrics.Metrics, reader Reader) *Guard {
 	g := &Guard{
 		cfg:     cfg,
@@ -127,6 +140,10 @@ func (g *Guard) Stop() {
 	})
 }
 
+// pollOnce performs a single VRAM sample, updates UsedMB/TotalMB, and applies
+// open/close hysteresis to the circuit-breaker. Poll failures leave prior
+// readings and circuit state unchanged (fail-steady: a flaky reader must not
+// flap the breaker open/closed).
 func (g *Guard) pollOnce() {
 	pollStart := time.Now()
 	used, total, err := g.reader.ReadUsageMB()
@@ -149,12 +166,16 @@ func (g *Guard) pollOnce() {
 	pct := (used / total) * 100.0
 	closeThreshold := g.cfg.CloseThresholdPct
 	if closeThreshold <= 0 {
+		// Defensive default if misconfigured: 5pp band below the open line.
 		closeThreshold = g.cfg.OOMThresholdPct - 5
 	}
 	if closeThreshold < 0 {
 		closeThreshold = 0
 	}
 
+	// Hysteresis: open at OOMThresholdPct, close only at CloseThresholdPct.
+	// Between the two, state is sticky so usage oscillating near the OOM line
+	// does not rapidly alternate reject/accept.
 	if pct >= g.cfg.OOMThresholdPct {
 		if !g.circuitOpen.Load() {
 			slog.Warn("VRAM guard OPEN — rejecting new requests",
@@ -172,6 +193,9 @@ func (g *Guard) pollOnce() {
 	}
 }
 
+// newVRAMReader selects a Reader for mode: "smi"/"nvidia-smi" force CLI
+// polling; "nvml" prefers NVML with smi fallback; "auto" (default) tries NVML
+// first then falls back to nvidia-smi.
 func newVRAMReader(mode string) Reader {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" {
@@ -202,6 +226,9 @@ func newVRAMReader(mode string) Reader {
 	return &smiReader{}
 }
 
+// newNVMLReader initialises NVML and collects device handles. The second
+// return value is false when NVML is unavailable or no GPUs are found; the
+// caller should fall back to smiReader.
 func newNVMLReader() (*nvmlReader, bool) {
 	ret := nvml.Init()
 	if ret != nvml.SUCCESS {
@@ -234,6 +261,7 @@ func newNVMLReader() (*nvmlReader, bool) {
 	return &nvmlReader{devices: devices}, true
 }
 
+// Name implements Reader.
 func (r *nvmlReader) Name() string { return "nvml" }
 
 // ReadUsageMB reports the reading of the most-utilised GPU so the circuit
@@ -263,6 +291,7 @@ func (r *nvmlReader) ReadUsageMB() (used, total float64, err error) {
 	return used, total, nil
 }
 
+// Close shuts down the NVML library. Safe to call once when the Guard stops.
 func (r *nvmlReader) Close() {
 	ret := nvml.Shutdown()
 	if ret != nvml.SUCCESS {
@@ -270,19 +299,22 @@ func (r *nvmlReader) Close() {
 	}
 }
 
+// Name implements Reader.
 func (r *smiReader) Name() string { return "nvidia-smi" }
 
+// ReadUsageMB implements Reader by invoking nvidia-smi.
 func (r *smiReader) ReadUsageMB() (used, total float64, err error) {
 	return queryVRAMViaSMI()
 }
 
+// Close implements Reader; nvidia-smi has no persistent handle to release.
 func (r *smiReader) Close() {}
 
 // smiTimeout bounds each nvidia-smi invocation so a hung driver cannot stall
 // the polling loop indefinitely.
 const smiTimeout = 5 * time.Second
 
-// queryVRAM runs nvidia-smi and parses used and total VRAM in megabytes.
+// queryVRAMViaSMI runs nvidia-smi and parses used and total VRAM in megabytes.
 // It returns an error if nvidia-smi is unavailable, times out, or produces
 // unexpected output; the caller (pollOnce) keeps the last known readings.
 func queryVRAMViaSMI() (used, total float64, err error) {
@@ -331,6 +363,8 @@ func parseSMIOutput(output string) (used, total float64, err error) {
 	return used, total, nil
 }
 
+// parseSMILine parses one nvidia-smi CSV line of the form "used, total"
+// (noheader, nounits). Both values are megabytes.
 func parseSMILine(line string) (used, total float64, err error) {
 	parts := strings.Split(line, ", ")
 	if len(parts) != 2 {

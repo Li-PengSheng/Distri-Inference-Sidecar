@@ -15,6 +15,7 @@ import (
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/vramguard"
 )
 
+// testVRAMReader is a fixed-usage Reader used to drive Guard state in tests.
 type testVRAMReader struct {
 	used  float64
 	total float64
@@ -28,6 +29,8 @@ func (r *testVRAMReader) Close() {}
 
 func (r *testVRAMReader) Name() string { return "test" }
 
+// startTestBatcher starts a Batcher against an httptest backend and a closed
+// (accepting) VRAM guard. The server and batcher are stopped via t.Cleanup.
 func startTestBatcher(t *testing.T, cfg Config, handler http.HandlerFunc) *Batcher {
 	t.Helper()
 

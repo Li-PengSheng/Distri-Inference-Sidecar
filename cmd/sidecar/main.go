@@ -1,14 +1,19 @@
 // Package main is the entry point for the Distri-Inference-Sidecar.
 //
-// It wires together three subsystems:
-//   - vramguard: polls nvidia-smi and opens a circuit-breaker when GPU VRAM
-//     utilisation exceeds the configured threshold.
+// It wires together the sidecar subsystems:
+//   - tokenizer: trains a Rust BPE vocabulary at startup and admits prompts
+//     before they reach the batcher.
+//   - vramguard: polls GPU VRAM (NVML preferred, nvidia-smi fallback) and
+//     opens a hysteretic circuit-breaker when utilisation exceeds the OOM
+//     threshold; the circuit closes only after usage drops below
+//     CloseThresholdPct.
 //   - batcher: collects gRPC inference requests into micro-batches and
 //     forwards them as a single HTTP call to the Python backend.
+//   - grpcserver: serves InferenceService on :50051.
 //   - metrics: exposes Prometheus metrics on :9090/metrics.
 //
 // The process blocks until it receives SIGINT or SIGTERM, then shuts down
-// gracefully.
+// gracefully (gRPC, batcher, VRAM guard, metrics HTTP).
 package main
 
 import (
@@ -39,6 +44,8 @@ const (
 	shutdownTimeout           = 10 * time.Second
 )
 
+// runtimeConfig holds validated environment-derived settings used to wire the
+// sidecar subsystems at startup.
 type runtimeConfig struct {
 	backendURL       string
 	maxBatchSize     int
@@ -50,6 +57,8 @@ type runtimeConfig struct {
 	vramReaderMode   string
 }
 
+// main loads configuration, starts tokenizer / metrics / VRAM guard / batcher /
+// gRPC, then blocks until SIGINT or SIGTERM and shuts down in reverse order.
 func main() {
 	cfg := loadAndValidateConfig()
 
@@ -113,6 +122,8 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
+	// Order matters: stop accepting RPCs first, then drain the batcher (which
+	// still needs to finish in-flight HTTP flushes), then stop VRAM polling.
 	srv.GracefulStop()
 	b.Stop()
 	vg.Stop()
@@ -165,6 +176,8 @@ func loadTokenizerCorpus() string {
 	return corpus
 }
 
+// parseBoolEnv interprets common truthy environment values ("1", "true",
+// "yes", "on", case-insensitive). Any other value, including unset, is false.
 func parseBoolEnv(key string) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
 	case "1", "true", "yes", "on":
@@ -174,6 +187,9 @@ func parseBoolEnv(key string) bool {
 	}
 }
 
+// loadAndValidateConfig reads required and optional environment variables,
+// applies defaults, and aborts the process on invalid values. See
+// docs/configuration.md for the full variable list.
 func loadAndValidateConfig() runtimeConfig {
 	backendURL := strings.TrimSpace(os.Getenv("BACKEND_URL"))
 	if backendURL == "" {
@@ -249,6 +265,8 @@ func loadAndValidateConfig() runtimeConfig {
 	}
 }
 
+// envIntRequired returns the integer value of key, or fallback when unset.
+// Non-integer values cause the process to exit.
 func envIntRequired(key string, fallback int) int {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -262,6 +280,8 @@ func envIntRequired(key string, fallback int) int {
 	return v
 }
 
+// envFloatRequired returns the float value of key, or fallback when unset.
+// Non-numeric values cause the process to exit.
 func envFloatRequired(key string, fallback float64) float64 {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {

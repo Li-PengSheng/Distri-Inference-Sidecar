@@ -24,6 +24,8 @@ import (
 
 var initTokenizerOnce sync.Once
 
+// initTestTokenizer trains the BPE vocabulary once for the package so Infer
+// admission works in tests without depending on TOKENIZER_CORPUS_PATH.
 func initTestTokenizer() {
 	initTokenizerOnce.Do(func() {
 		if err := tokenizer.Init(strings.Repeat("hello world foo bar ", 50)); err != nil {
@@ -32,6 +34,7 @@ func initTestTokenizer() {
 	})
 }
 
+// testVRAMReader is a fixed-usage Reader for HealthCheck / circuit tests.
 type testVRAMReader struct {
 	used  float64
 	total float64
@@ -41,6 +44,9 @@ func (r *testVRAMReader) ReadUsageMB() (float64, float64, error) { return r.used
 func (r *testVRAMReader) Close()                                 {}
 func (r *testVRAMReader) Name() string                           { return "test" }
 
+// startTestGRPCServer wires tokenizer, a closed VRAM guard, an httptest backend,
+// and a gRPC Server on a free port; returns a connected client. Cleanup stops
+// the server and batcher.
 func startTestGRPCServer(t *testing.T, handler http.HandlerFunc) pb.InferenceServiceClient {
 	t.Helper()
 	initTestTokenizer()

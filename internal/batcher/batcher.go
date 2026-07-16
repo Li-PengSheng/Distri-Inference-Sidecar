@@ -54,10 +54,13 @@ type Request struct {
 	InputData []byte
 	// ModelName identifies which model the backend should run.
 	ModelName string
-	// Ctx carries the caller context for cancellation propagation.
+	// Ctx carries the caller context for cancellation propagation. Checked in
+	// flushBatch before the backend call; not used to cancel the batch HTTP
+	// request itself (one cancelled client must not abort siblings).
 	Ctx context.Context
 	// ResultCh receives exactly one Result when the batch containing this
-	// request has been processed by the backend.
+	// request has been processed (or failed). Callers should use a buffer of
+	// at least 1 so a departed client does not block fan-out.
 	ResultCh chan Result
 }
 
@@ -100,6 +103,8 @@ type singleResult struct {
 	Error      string `json:"error"`
 }
 
+// batchResponse is the JSON envelope returned by the Python backend /infer
+// endpoint: one singleResult per submitted request id.
 type batchResponse struct {
 	Results []singleResult `json:"results"`
 }
@@ -124,13 +129,24 @@ func New(cfg Config, vg *vramguard.Guard, m *metrics.Metrics) *Batcher {
 	}
 }
 
-// Submit enqueues a request.
+// Submit enqueues a request for the next micro-batch. It returns immediately
+// with one of:
+//   - ErrCircuitOpen when the VRAM guard circuit-breaker is open
+//   - ErrBatcherStopped when Stop has already been called
+//   - ErrQueueFull when the internal queue (capacity 1000) cannot accept more
+//
+// On success the caller must wait on req.ResultCh for exactly one Result.
 func (b *Batcher) Submit(req *Request) error {
+	// Fast-path reject under VRAM pressure before taking stopMu or touching
+	// the queue — avoids amplifying load when the circuit is already open.
 	if b.vg.IsOpen() {
 		b.metrics.CircuitBreakerTrips.Inc()
 		return ErrCircuitOpen
 	}
 
+	// RLock spans the enqueue so Stop's write-lock cannot flip stopped=true
+	// between the check and the send (which would leave a post-shutdown
+	// request sitting in the queue with no consumer guarantee).
 	b.stopMu.RLock()
 	defer b.stopMu.RUnlock()
 	if b.stopped {
@@ -142,6 +158,8 @@ func (b *Batcher) Submit(req *Request) error {
 		b.reqCount.Add(1)
 		return nil
 	default:
+		// Non-blocking: a full queue must fail fast rather than stall the
+		// gRPC handler until capacity frees up.
 		b.metrics.QueueRejects.Inc()
 		return ErrQueueFull
 	}
@@ -161,6 +179,9 @@ func (b *Batcher) Start() {
 	}()
 
 	for {
+		// Non-blocking peek: collectBatch also watches stopCh, so an empty
+		// return after stop still drains below. This early check avoids one
+		// extra collect wait when shutdown is already signalled.
 		select {
 		case <-b.stopCh:
 			b.drainQueueWithError(fmt.Errorf("batcher stopped"))
@@ -174,10 +195,13 @@ func (b *Batcher) Start() {
 				b.drainQueueWithError(fmt.Errorf("batcher stopped"))
 				return
 			}
+			// Idle timeout with nothing queued — loop and wait again.
 			continue
 		}
 
 		slog.Debug("flushing batch", "size", len(batch))
+		// Flush concurrently so the next collectBatch can start while this
+		// HTTP round-trip is in flight (pipeline multiple batches).
 		b.wg.Add(1)
 		go func(batch []*Request) {
 			defer b.wg.Done()
@@ -203,6 +227,7 @@ func (b *Batcher) Stop() {
 	b.wg.Wait()
 }
 
+// isStopped reports whether Stop has signalled the main loop via stopCh.
 func (b *Batcher) isStopped() bool {
 	select {
 	case <-b.stopCh:
@@ -212,6 +237,8 @@ func (b *Batcher) isStopped() bool {
 	}
 }
 
+// drainQueueWithError non-blockingly empties the queue, delivering err to each
+// pending request. Used during shutdown so callers are not left waiting.
 func (b *Batcher) drainQueueWithError(err error) {
 	for {
 		select {
@@ -223,6 +250,7 @@ func (b *Batcher) drainQueueWithError(err error) {
 	}
 }
 
+// failRequest increments InferErrors and delivers a terminal Result with Err.
 func (b *Batcher) failRequest(req *Request, err error) {
 	b.metrics.InferErrors.Inc()
 	req.ResultCh <- Result{Err: err}
@@ -234,6 +262,9 @@ func (b *Batcher) failRequest(req *Request, err error) {
 func (b *Batcher) flushBatch(batch []*Request) {
 	start := time.Now()
 
+	// Drop callers that already cancelled while waiting in the queue / collect
+	// window so we do not spend GPU time on abandoned prompts. Fail them with
+	// the context error so statusFromResultErr can map Canceled/DeadlineExceeded.
 	active := make([]*Request, 0, len(batch))
 	for _, req := range batch {
 		if req.Ctx != nil {
@@ -249,8 +280,9 @@ func (b *Batcher) flushBatch(batch []*Request) {
 	}
 	batch = active
 
-	// Build a map so we can fan results back by ID.
-	// Slice values preserve all requests even if IDs are duplicated.
+	// Key by ID for fan-out. Slice values keep FIFO order when clients reuse
+	// the same RequestId within one batch (otherwise a map[string]*Request
+	// would silently drop all but one waiter).
 	reqMap := make(map[string][]*Request, len(batch))
 	for _, r := range batch {
 		reqMap[r.ID] = append(reqMap[r.ID], r)
@@ -289,6 +321,8 @@ func (b *Batcher) flushBatch(batch []*Request) {
 		return
 	}
 
+	// Detached from any single caller ctx: one cancelled client must not abort
+	// the whole batch HTTP call. Timeout is bounded by httpClient.Timeout.
 	ctx, cancel := context.WithTimeout(context.Background(), b.httpClient.Timeout)
 	defer cancel()
 
@@ -320,6 +354,8 @@ func (b *Batcher) flushBatch(batch []*Request) {
 		}
 		err = fmt.Errorf("backend returned status %d: %s", resp.StatusCode, string(respBody))
 		slog.Error("backend returned non-2xx status", "status_code", resp.StatusCode, "batch_size", len(batch))
+		// Transport-level failure of the whole batch — same sentinel for every
+		// waiter so gRPC maps it to Unavailable.
 		b.failBatch(batch, wrapUnavailable(err))
 		return
 	}
@@ -331,7 +367,8 @@ func (b *Batcher) flushBatch(batch []*Request) {
 		return
 	}
 
-	// Fan each result back to the correct waiting caller by ID
+	// Match results by ID in arrival order; pop from the front of each slice
+	// so duplicate IDs each receive one response.
 	for _, res := range batchResp.Results {
 		reqs := reqMap[res.ID]
 		if len(reqs) == 0 {
@@ -343,6 +380,8 @@ func (b *Batcher) flushBatch(batch []*Request) {
 
 		if res.Error != "" {
 			b.metrics.InferErrors.Inc()
+			// Per-item backend error string (not a sentinel) — gRPC will put
+			// this in InferResponse.Error rather than an RPC status.
 			req.ResultCh <- Result{Err: fmt.Errorf("%s", res.Error)}
 		} else {
 			b.metrics.InferSuccess.Inc()
@@ -353,7 +392,7 @@ func (b *Batcher) flushBatch(batch []*Request) {
 		}
 	}
 
-	// Ensure every queued request gets exactly one terminal result.
+	// Backend omitted some IDs — still unblock every waiter exactly once.
 	for id, reqs := range reqMap {
 		for _, req := range reqs {
 			b.metrics.InferErrors.Inc()
@@ -364,15 +403,20 @@ func (b *Batcher) flushBatch(batch []*Request) {
 	slog.Debug("batch flushed", "size", len(batch), "latency_ms", latencyMs)
 }
 
+// failBatch delivers the same terminal error to every request in batch.
 func (b *Batcher) failBatch(batch []*Request, err error) {
 	for _, req := range batch {
 		b.failRequest(req, err)
 	}
 }
 
-// collectBatch waits up to MaxWaitMs OR until MaxBatchSize is reached.
+// collectBatch waits up to dynamicWaitMs() or until MaxBatchSize is reached,
+// whichever comes first. An empty slice may be returned on stop or timeout
+// with nothing collected.
 func (b *Batcher) collectBatch() []*Request {
 	var batch []*Request
+	// Timer starts when collection begins; under high QPS dynamicWaitMs grows
+	// so more requests can join before flush.
 	deadline := time.After(b.dynamicWaitMs())
 
 	for {
@@ -383,8 +427,10 @@ func (b *Batcher) collectBatch() []*Request {
 				return batch // full batch — flush immediately
 			}
 		case <-deadline:
-			return batch // time up — flush whatever we have
+			return batch // time up — flush whatever we have (may be empty)
 		case <-b.stopCh:
+			// Return partial batch to the Start loop so in-flight items still
+			// get flushed (or drained) rather than being dropped silently.
 			return batch
 		}
 	}
@@ -416,7 +462,12 @@ func (b *Batcher) trackQPS() {
 // collect loop into a CPU-burning busy loop on an idle queue.
 const minCollectWait = time.Millisecond
 
-// Dynamic wait: high QPS → wait longer to fill bigger batches
+// dynamicWaitMs returns the collection window for the next batch. Higher
+// observed QPS lengthens the wait (up to MaxWaitMs) so batches fill larger;
+// lower QPS shortens it for lower latency. Thresholds (50 / 100 QPS) are
+// coarse heuristics tied to currentQPS from trackQPS. The result is never
+// below minCollectWait, which prevents a busy-loop when MaxWaitMs is very
+// small (integer division would otherwise yield 0).
 func (b *Batcher) dynamicWaitMs() time.Duration {
 	qps := b.currentQPS.Load()
 	var wait time.Duration
@@ -434,6 +485,7 @@ func (b *Batcher) dynamicWaitMs() time.Duration {
 	return wait
 }
 
+// wrapUnavailable wraps err with ErrBackendUnavailable unless it already is.
 func wrapUnavailable(err error) error {
 	if errors.Is(err, ErrBackendUnavailable) {
 		return err
@@ -441,6 +493,8 @@ func wrapUnavailable(err error) error {
 	return fmt.Errorf("%w: %v", ErrBackendUnavailable, err)
 }
 
+// wrapResponseInvalid wraps err with ErrBackendResponseInvalid unless it
+// already is (payload encode/decode failures).
 func wrapResponseInvalid(err error) error {
 	if errors.Is(err, ErrBackendResponseInvalid) {
 		return err

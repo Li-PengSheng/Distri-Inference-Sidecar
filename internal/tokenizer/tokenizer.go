@@ -50,8 +50,10 @@ func Init(trainCorpus string) error {
 }
 
 // CountTokens returns the number of BPE tokens in input as determined by the
-// Rust tokenizer. If the tokenizer has not been initialized it falls back to
-// whitespace splitting. A negative return value signals a tokenizer failure.
+// Rust tokenizer (bpe_count_tokens). Init must have succeeded first; a
+// negative return value signals a tokenizer failure (uninitialised vocabulary
+// or an FFI-side error) and should be treated as ErrTokenizerFailure by
+// callers such as Validate.
 func CountTokens(input string) int {
 	cs := C.CString(input)
 	defer C.free(unsafe.Pointer(cs))

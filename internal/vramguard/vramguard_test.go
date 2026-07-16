@@ -6,6 +6,7 @@ import (
 	"github.com/Li-PengSheng/Distri-Inference-Sidecar/internal/metrics"
 )
 
+// fakeReader returns predetermined used/total (or err) without touching GPUs.
 type fakeReader struct {
 	used  float64
 	total float64
@@ -20,6 +21,7 @@ func (f *fakeReader) Close() {}
 
 func (f *fakeReader) Name() string { return "fake" }
 
+// testGuardConfig returns a small-interval hysteretic config for unit tests.
 func testGuardConfig() Config {
 	return Config{
 		PollIntervalMs:    100,

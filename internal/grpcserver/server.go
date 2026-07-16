@@ -2,8 +2,9 @@
 // proto/inference.proto.
 //
 // The server exposes two RPCs:
-//   - Infer: accepts a single inference request, submits it to the Batcher,
-//     and blocks until the result is available or the client context is done.
+//   - Infer: admits the prompt via the BPE tokenizer, submits it to the
+//     Batcher, and blocks until the result is available or the client
+//     context is done.
 //   - HealthCheck: returns current VRAM usage and circuit-breaker state.
 package grpcserver
 
@@ -85,9 +86,15 @@ func (s *Server) GracefulStop() {
 	}
 }
 
-// Infer is called by gRPC clients.
-// It submits the request to the batcher and blocks until result comes back.
+// Infer admits the prompt via the BPE tokenizer, submits it to the batcher,
+// and blocks until a Result arrives or the client context is cancelled.
+// Over-limit prompts return InvalidArgument; tokenizer FFI failures return
+// Internal. Batcher rejection and backend errors are mapped by
+// statusFromSubmitErr / statusFromResultErr.
 func (s *Server) Infer(ctx context.Context, req *pb.InferRequest) (*pb.InferResponse, error) {
+	// Admit before enqueue so over-long prompts never consume batcher capacity
+	// or hit the Python/Ollama path. Tokenizer failures are Internal (sidecar
+	// fault); length violations are InvalidArgument (client fault).
 	input := string(req.InputData)
 	if err := tokenizer.Validate(input); err != nil {
 		if errors.Is(err, tokenizer.ErrTokenizerFailure) {
@@ -98,6 +105,8 @@ func (s *Server) Infer(ctx context.Context, req *pb.InferRequest) (*pb.InferResp
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
+	// Buffer of 1 so flushBatch never blocks if the client already left via
+	// ctx.Done(); the Result is still delivered once and then dropped.
 	resultCh := make(chan batcher.Result, 1)
 
 	bReq := &batcher.Request{
@@ -116,6 +125,9 @@ func (s *Server) Infer(ctx context.Context, req *pb.InferRequest) (*pb.InferResp
 	select {
 	case result := <-resultCh:
 		if result.Err != nil {
+			// Infrastructure failures become RPC status codes so clients can
+			// retry/back off. Opaque model/backend error strings stay in the
+			// response body (RPC succeeds) to preserve per-request detail.
 			if st, ok := statusFromResultErr(result.Err); ok {
 				return nil, st
 			}
@@ -131,11 +143,17 @@ func (s *Server) Infer(ctx context.Context, req *pb.InferRequest) (*pb.InferResp
 		}, nil
 
 	case <-ctx.Done():
+		// Request may still be in the queue or an in-flight batch; flushBatch
+		// drops cancelled items before the HTTP call. We return immediately
+		// and do not wait for ResultCh.
 		slog.Warn("request context cancelled", "id", req.RequestId)
 		return nil, statusFromContextErr(ctx.Err())
 	}
 }
 
+// statusFromSubmitErr maps batcher.Submit failures to gRPC status codes:
+// ResourceExhausted for circuit-open / queue-full (client should back off),
+// Unavailable when stopped (process is draining; retry after reconnect).
 func statusFromSubmitErr(err error) error {
 	switch {
 	case errors.Is(err, batcher.ErrCircuitOpen), errors.Is(err, batcher.ErrQueueFull):
@@ -147,6 +165,10 @@ func statusFromSubmitErr(err error) error {
 	}
 }
 
+// statusFromResultErr maps known batch Result errors to gRPC statuses.
+// The bool is false for opaque backend/per-request errors that should be
+// returned in InferResponse.Error instead of as an RPC status — those are
+// usually model-side failures that are not retryable as transport errors.
 func statusFromResultErr(err error) (error, bool) {
 	switch {
 	case errors.Is(err, batcher.ErrBackendUnavailable):
@@ -162,6 +184,8 @@ func statusFromResultErr(err error) (error, bool) {
 	}
 }
 
+// statusFromContextErr maps a cancelled or deadline-exceeded client context
+// to the corresponding gRPC status while Infer is waiting on ResultCh.
 func statusFromContextErr(err error) error {
 	if errors.Is(err, context.Canceled) {
 		return status.Error(codes.Canceled, "request cancelled by client")

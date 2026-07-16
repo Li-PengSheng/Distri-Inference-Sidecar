@@ -20,6 +20,8 @@ type Metrics struct {
 	CircuitBreakerTrips prometheus.Counter
 	// VRAMUsedMB reports the current GPU VRAM consumption in megabytes.
 	VRAMUsedMB       prometheus.Gauge
+	// RejectedRequests counts prompts rejected by tokenizer admission
+	// (token count above MaxInputTokens).
 	RejectedRequests prometheus.Counter
 	// VRAMPollDurationMs tracks the time spent reading VRAM usage.
 	VRAMPollDurationMs prometheus.Histogram
@@ -45,6 +47,8 @@ func NewForTest() *Metrics {
 	return registerMetrics(prometheus.NewRegistry())
 }
 
+// registerMetrics constructs collectors and registers them with reg.
+// New uses the default registry; NewForTest uses an isolated registry.
 func registerMetrics(reg prometheus.Registerer) *Metrics {
 	m := &Metrics{
 		InferLatency: prometheus.NewHistogram(prometheus.HistogramOpts{
