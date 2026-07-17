@@ -6,6 +6,16 @@ This document records intentional constraints and operational caveats for Distri
 
 `OOM_THRESHOLD_PCT` (default **90**), `CLOSE_THRESHOLD_PCT` (default **85**) and `POLL_INTERVAL_MS` (default **500**) can be set through environment variables; values are validated at startup. See [configuration.md](configuration.md).
 
+## TODO: harden process shutdown under a global deadline
+
+`shutdownTimeout` (10s) today mostly covers metrics HTTP teardown. It does **not** hard-limit `GracefulStop` → Infer → Batcher HTTP (up to `BACKEND_TIMEOUT_MS`, default 120s). `Batcher.Stop()` also fails queued items instead of draining them. Until the items below are done, size pod `terminationGracePeriodSeconds` above the backend timeout or accept SIGKILL under load.
+
+- [ ] **Batcher**: `BeginShutdown` (reject new Submit, drain queue) / `ForceStop` (cancel `runCtx` HTTP, fail remainder) / `Done()`; do not `wg.Wait()` inside `Start`
+- [ ] **gRPC**: run `GracefulStop` asynchronously; on deadline call `Stop()`
+- [ ] **VRAM guard**: expose `Done()` and wait after `Stop` (NVML close)
+- [ ] **main**: one shared deadline selecting on component `Done` channels; force path = `ForceStop` then `srv.Stop`
+- [ ] **Tests**: drain-on-`BeginShutdown`, cancel-on-`ForceStop`, deadline force path
+
 ## gRPC client cancellation does not dequeue early
 
 When a caller cancels or times out, the request may already be sitting in the batcher queue. The sidecar does **not** remove it from the queue at cancel time. Cancellation is honoured only at `flushBatch`, immediately before the HTTP call to the backend: cancelled requests are filtered out and receive a terminal error on their `ResultCh`.

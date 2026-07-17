@@ -80,7 +80,7 @@ Full reproduction: [docs/testing.md](docs/testing.md) · [docs/benchmarks.md](do
 
 ## Known limitations
 
-Cancel/dequeue behaviour, Compose health ordering, `rust_ops` build deps, mixed-model batches, and Ollama throughput / timeout caveats are documented in **[docs/limitations.md](docs/limitations.md)**.
+Cancel/dequeue behaviour, **shutdown hardening (TODO)**, Compose health ordering, `rust_ops` build deps, mixed-model batches, and Ollama throughput / timeout caveats are documented in **[docs/limitations.md](docs/limitations.md)**.
 
 ---
 

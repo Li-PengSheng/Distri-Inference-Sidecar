@@ -35,26 +35,26 @@ import (
 )
 
 const (
-	defaultMaxBatchSize     = 8
-	defaultMaxWaitMs        = 50
-	defaultBackendTimeoutMs = 120000
-	defaultPollIntervalMs     = 500
-	defaultOOMThresholdPct    = 90.0
-	defaultCloseThresholdPct  = 85.0
-	shutdownTimeout           = 10 * time.Second
+	defaultMaxBatchSize      = 8
+	defaultMaxWaitMs         = 50
+	defaultBackendTimeoutMs  = 120000
+	defaultPollIntervalMs    = 500
+	defaultOOMThresholdPct   = 90.0
+	defaultCloseThresholdPct = 85.0
+	shutdownTimeout          = 10 * time.Second
 )
 
 // runtimeConfig holds validated environment-derived settings used to wire the
 // sidecar subsystems at startup.
 type runtimeConfig struct {
-	backendURL       string
-	maxBatchSize     int
-	maxWaitMs        int
-	backendTimeoutMs int
-	pollIntervalMs   int
-	oomThresholdPct  float64
+	backendURL        string
+	maxBatchSize      int
+	maxWaitMs         int
+	backendTimeoutMs  int
+	pollIntervalMs    int
+	oomThresholdPct   float64
 	closeThresholdPct float64
-	vramReaderMode   string
+	vramReaderMode    string
 }
 
 // main loads configuration, starts tokenizer / metrics / VRAM guard / batcher /
@@ -256,10 +256,10 @@ func loadAndValidateConfig() runtimeConfig {
 	}
 
 	return runtimeConfig{
-		backendURL:       backendURL,
-		maxBatchSize:     maxBatchSize,
-		maxWaitMs:        maxWaitMs,
-		backendTimeoutMs: backendTimeoutMs,
+		backendURL:        backendURL,
+		maxBatchSize:      maxBatchSize,
+		maxWaitMs:         maxWaitMs,
+		backendTimeoutMs:  backendTimeoutMs,
 		pollIntervalMs:    pollIntervalMs,
 		oomThresholdPct:   oomThresholdPct,
 		closeThresholdPct: closeThresholdPct,

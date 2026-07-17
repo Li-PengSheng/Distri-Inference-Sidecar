@@ -80,7 +80,7 @@ LD_LIBRARY_PATH=$PWD/rust_ops/target/release \
 
 ## 已知限制
 
-取消不提前出队、Compose 健康检查顺序、`rust_ops` 构建依赖、混合 `model_name` 批处理、Ollama 吞吐/超时说明等，见 **[docs/limitations.md](docs/limitations.md)**。
+取消不提前出队、**停机加固（TODO）**、Compose 健康检查顺序、`rust_ops` 构建依赖、混合 `model_name` 批处理、Ollama 吞吐/超时说明等，见 **[docs/limitations.md](docs/limitations.md)**。
 
 ---
 

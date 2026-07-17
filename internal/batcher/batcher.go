@@ -123,9 +123,9 @@ func New(cfg Config, vg *vramguard.Guard, m *metrics.Metrics) *Batcher {
 	}
 
 	return &Batcher{
-		cfg:   cfg,
-		queue: make(chan *Request, 1000),
-		vg:    vg,
+		cfg:     cfg,
+		queue:   make(chan *Request, 1000),
+		vg:      vg,
 		metrics: m,
 		httpClient: &http.Client{
 			Timeout: time.Duration(timeoutMs) * time.Millisecond,
